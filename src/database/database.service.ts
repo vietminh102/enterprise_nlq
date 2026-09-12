@@ -24,7 +24,7 @@ async executeQuery(sql: string, params: any[] = []) {
     try {
       const result = await this.pool.query(sql, params);
       return result.rows;
-    } catch (error: any) { // Thêm ': any' vào đây để giải quyết lỗi
+    } catch (error: any) { 
       console.error('Lỗi thực thi Database:', error.message);
       throw error;
     }
