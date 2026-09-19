@@ -13,11 +13,12 @@ export class AiService {
       console.warn('⚠️ Cảnh báo: Chưa tìm thấy GEMINI_API_KEY trong file .env');
     }
     
+    
     this.genAI = new GoogleGenerativeAI(apiKey || '');
     
-    // Khởi tạo model Gemini 1.5 Flash cho tốc độ siêu tốc
+    
     this.model = this.genAI.getGenerativeModel({ 
-      model: 'gemini-3.6-flash',
+      model: 'gemini-3.5-flash-lite',
       generationConfig: {
         responseMimeType: "application/json",
       }
