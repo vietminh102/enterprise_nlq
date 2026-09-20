@@ -1,5 +1,6 @@
 import { Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config'; 
+import { ScheduleModule } from '@nestjs/schedule';
 import { DatabaseModule } from './database/database.module';
 import { AiModule } from './ai/ai.module';
 import { GuardrailsModule } from './guardrails/guardrails.module';
@@ -14,7 +15,8 @@ import { ChatopsModule } from './chatops/chatops.module';
 @Module({
   imports: [
     // Cấu hình này giúp các file khác đọc được file .env
-    ConfigModule.forRoot({ isGlobal: true }), 
+    ConfigModule.forRoot({ isGlobal: true }),
+    ScheduleModule.forRoot(),
     DatabaseModule,
     AiModule,
     GuardrailsModule,
