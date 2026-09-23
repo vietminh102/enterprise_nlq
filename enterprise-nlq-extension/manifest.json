@@ -1,0 +1,16 @@
+{
+  "manifest_version": 3,
+  "name": "Enterprise Data Assistant",
+  "version": "1.0.0",
+  "description": "Trợ lý AI truy vấn dữ liệu doanh nghiệp",
+  "permissions": ["sidePanel"],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "action": {
+    "default_title": "Mở Trợ lý AI"
+  },
+  "side_panel": {
+    "default_path": "index.html"
+  }
+}
