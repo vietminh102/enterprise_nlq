@@ -22,14 +22,28 @@ export class OrchestratorService {
       const schemaContext = schemas.join('\n');
       console.log(`[Orchestrator] Đã tìm thấy Schema liên quan.`);
 
-      // Bước 2: AI Text-to-SQL (Bạn tự điều chỉnh tên hàm generateSql cho khớp với AiService của bạn)
-      // Giả sử hàm này nhận vào câu hỏi và ngữ cảnh schema
-      const generatedSql = await this.aiService.generateSql(question, schemaContext);
-      console.log(`[Orchestrator] AI sinh ra SQL: ${generatedSql}`);
+      // Bước 2: AI Text-to-SQL
+      const aiResponse = await this.aiService.generateSql(question, schemaContext);
+      
+      // BÓC TÁCH JSON: Chuyển đổi phản hồi của AI thành Object và lấy ra chuỗi SQL
+      let aiResultObj;
+      try {
+        // Làm sạch các thẻ markdown (nếu có) trước khi parse
+        const cleanJsonString = typeof aiResponse === 'string' 
+          ? aiResponse.replace(/```json/g, '').replace(/```/g, '').trim() 
+          : aiResponse;
+          
+        aiResultObj = typeof cleanJsonString === 'string' ? JSON.parse(cleanJsonString) : cleanJsonString;
+      } catch (e) {
+        throw new Error('AI không trả về đúng định dạng JSON.');
+      }
 
-      // Bước 3: Guardrails - Kiểm duyệt an toàn
-      // Giả sử hàm này kiểm tra câu lệnh SELECT và tự động thêm LIMIT 100
-      const safeSql = this.guardrailsService.validateAndSanitize(generatedSql);
+      // Trích xuất chuỗi SQL thuần túy
+      const rawSql = aiResultObj.sql_query;
+      console.log(`[Orchestrator] AI sinh ra SQL: ${rawSql}`);
+
+      // Bước 3: Guardrails - Kiểm duyệt an toàn (Đầu vào giờ đây chắc chắn là String)
+      const safeSql = this.guardrailsService.validateAndSanitize(rawSql);
       console.log(`[Orchestrator] SQL an toàn sau kiểm duyệt: ${safeSql}`);
 
       // Bước 4: Database - Chạy truy vấn
@@ -41,6 +55,8 @@ export class OrchestratorService {
         success: true,
         question: question,
         generated_sql: safeSql,
+        chart_type: aiResultObj.chart_type, // Trả thêm cấu hình biểu đồ cho Frontend
+        explanation: aiResultObj.explanation, // Trả thêm lời giải thích của AI
         data: data
       };
 

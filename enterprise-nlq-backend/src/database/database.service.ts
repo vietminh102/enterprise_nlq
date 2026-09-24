@@ -15,6 +15,10 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
       user: this.configService.get<string>('DB_USER'),
       password: this.configService.get<string>('DB_PASS'),
       database: this.configService.get<string>('DB_NAME'),
+
+      ssl: {
+        rejectUnauthorized: false, 
+      }
     });
     console.log('Đã kết nối thành công vào PostgreSQL với quyền Read-Only');
   }

@@ -13,12 +13,10 @@ export class AiService {
       console.warn('⚠️ Cảnh báo: Chưa tìm thấy GEMINI_API_KEY trong file .env');
     }
     
-    
     this.genAI = new GoogleGenerativeAI(apiKey || '');
     
-    
     this.model = this.genAI.getGenerativeModel({ 
-      model: 'gemini-3.5-flash',
+      model: 'gemini-3.5-flash', 
       generationConfig: {
         responseMimeType: "application/json",
       }
@@ -27,23 +25,24 @@ export class AiService {
 
   async generateSql(userQuery: string, schemaMetadata: string): Promise<any> {
     const prompt = `
-Bạn là chuyên gia phân tích dữ liệu Enterprise PostgreSQL. 
-Hãy chuyển đổi câu hỏi của người dùng thành câu lệnh SQL dựa trên lược đồ cơ sở dữ liệu sau:
+Bạn là một chuyên gia phân tích dữ liệu và viết mã SQL (PostgreSQL) xuất sắc.
+Nhiệm vụ của bạn là chuyển đổi câu hỏi bằng ngôn ngữ tự nhiên của người dùng thành câu lệnh SQL để truy vấn dữ liệu.
 
-Lược đồ (Schema):
+=== LƯỢC ĐỒ CƠ SỞ DỮ LIỆU (SCHEMA) ===
 ${schemaMetadata}
+=======================================
 
-Câu hỏi của người dùng: "${userQuery}"
+=== CÂU HỎI CỦA NGƯỜI DÙNG ===
+${userQuery}
+=======================================
 
-Quy tắc BẮT BUỘC:
-1. CHỈ sử dụng lệnh SELECT.
-2. KHÔNG sử dụng DROP, DELETE, UPDATE, INSERT, ALTER.
-3. Cấu trúc JSON trả về bắt buộc phải đúng định dạng sau:
-{
-  "sql_query": "câu lệnh SQL ở đây",
-  "chart_type": "pie | bar | line | table",
-  "explanation": "Giải thích ngắn gọn logic bạn dùng"
-}
+⚠️ CÁC QUY TẮC BẮT BUỘC PHẢI TUÂN THỦ:
+1. TUYỆT ĐỐI KHÔNG TỰ BỊA RA TÊN CỘT HOẶC TÊN BẢNG. Chỉ được phép sử dụng CHÍNH XÁC các bảng và cột được liệt kê trong Schema ở trên.
+2. Ví dụ: Nếu Schema ghi cột là 'id', bạn PHẢI dùng 'id', không được tự ý đổi thành 'customer_id'. Nếu Schema ghi là 'name', không được đổi thành 'customer_name'.
+3. Trả về kết quả dưới dạng JSON thuần túy, có các khóa sau:
+   - "sql_query": Câu lệnh SQL chuẩn PostgreSQL.
+   - "chart_type": "bar", "pie", "line" hoặc "table" tùy thuộc vào dữ liệu.
+   - "explanation": Giải thích ngắn gọn bằng tiếng Việt.
 `;
 
     try {

@@ -27,7 +27,7 @@ export class VectorSearchService {
       const vectorString = `[${queryEmbedding.join(',')}]`;
 
       const sqlQuery = `
-        SELECT table_schema_definition 
+        SELECT description 
         FROM enterprise_embeddings 
         ORDER BY embedding <=> $1::vector 
         LIMIT 3;
@@ -37,7 +37,7 @@ export class VectorSearchService {
       const rows = await this.dbService.executeQuery(sqlQuery, [vectorString]);
 
       // Vì executeQuery đã trả về result.rows, chúng ta chỉ cần map trực tiếp biến rows
-      return rows.map((row: any) => row.table_schema_definition);
+      return rows.map((row: any) => row.definition);
       
     } catch (error: any) { 
       console.error('Lỗi Vector Search:', error.message);
