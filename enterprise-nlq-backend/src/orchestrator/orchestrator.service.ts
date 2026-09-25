@@ -19,16 +19,29 @@ export class OrchestratorService {
 
       // Bước 1: RAG - Tìm Schema liên quan
       const schemas = await this.vectorSearchService.findRelevantSchemas(question);
-      const schemaContext = schemas.join('\n');
-      console.log(`[Orchestrator] Đã tìm thấy Schema liên quan.`);
+      
+      // LOG ĐỂ KIỂM TRA DỮ LIỆU THÔ TỪ VECTOR SEARCH
+      console.log(`[Orchestrator] Dữ liệu thô từ Vector Search:`, schemas);
+
+      if (!schemas || schemas.length === 0) {
+        console.warn(`[Orchestrator] ⚠️ CẢNH BÁO: Không tìm thấy Schema nào trong Vector DB.`);
+      }
+
+      // XỬ LÝ AN TOÀN: Nếu schemas là mảng Object, ta cần trích xuất đúng cột chứa nội dung lược đồ (VD: description, schema_info, v.v.)
+      const schemaContext = schemas.map((item: any) => {
+        if (typeof item === 'string') return item;
+        // Sửa 'description' thành tên cột lưu Schema thực tế trong bảng enterprise_embeddings của bạn
+        return item.description || item.schema_info || item.content || JSON.stringify(item); 
+      }).join('\n');
+
+      console.log(`[Orchestrator] Đã tổng hợp Schema dài ${schemaContext.length} ký tự.`);
 
       // Bước 2: AI Text-to-SQL
       const aiResponse = await this.aiService.generateSql(question, schemaContext);
       
-      // BÓC TÁCH JSON: Chuyển đổi phản hồi của AI thành Object và lấy ra chuỗi SQL
+      // BÓC TÁCH JSON
       let aiResultObj;
       try {
-        // Làm sạch các thẻ markdown (nếu có) trước khi parse
         const cleanJsonString = typeof aiResponse === 'string' 
           ? aiResponse.replace(/```json/g, '').replace(/```/g, '').trim() 
           : aiResponse;
@@ -38,25 +51,24 @@ export class OrchestratorService {
         throw new Error('AI không trả về đúng định dạng JSON.');
       }
 
-      // Trích xuất chuỗi SQL thuần túy
       const rawSql = aiResultObj.sql_query;
       console.log(`[Orchestrator] AI sinh ra SQL: ${rawSql}`);
 
-      // Bước 3: Guardrails - Kiểm duyệt an toàn (Đầu vào giờ đây chắc chắn là String)
+      // Bước 3: Guardrails
       const safeSql = this.guardrailsService.validateAndSanitize(rawSql);
-      console.log(`[Orchestrator] SQL an toàn sau kiểm duyệt: ${safeSql}`);
+      console.log(`[Orchestrator] SQL an toàn: ${safeSql}`);
 
-      // Bước 4: Database - Chạy truy vấn
+      // Bước 4: Database
       const data = await this.dbService.executeQuery(safeSql);
       console.log(`[Orchestrator] Đã lấy được ${data.length} dòng dữ liệu.`);
 
-      // Bước 5: Trả về kết quả tổng hợp
+      // Bước 5: Trả về kết quả
       return {
         success: true,
         question: question,
         generated_sql: safeSql,
-        chart_type: aiResultObj.chart_type, // Trả thêm cấu hình biểu đồ cho Frontend
-        explanation: aiResultObj.explanation, // Trả thêm lời giải thích của AI
+        chart_type: aiResultObj.chart_type,
+        explanation: aiResultObj.explanation,
         data: data
       };
 

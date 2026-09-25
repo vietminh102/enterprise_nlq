@@ -16,7 +16,7 @@ export class AiService {
     this.genAI = new GoogleGenerativeAI(apiKey || '');
     
     this.model = this.genAI.getGenerativeModel({ 
-      model: 'gemini-3.5-flash', 
+      model: 'gemini-3.5-flash-lite', 
       generationConfig: {
         responseMimeType: "application/json",
       }
@@ -24,25 +24,31 @@ export class AiService {
   }
 
   async generateSql(userQuery: string, schemaMetadata: string): Promise<any> {
+
+    console.log('--- SCHEMA ĐANG ĐƯỢC BƠM CHO AI ---');
+    console.log(schemaMetadata);
+    console.log('-----------------------------------');
     const prompt = `
 Bạn là một chuyên gia phân tích dữ liệu và viết mã SQL (PostgreSQL) xuất sắc.
 Nhiệm vụ của bạn là chuyển đổi câu hỏi bằng ngôn ngữ tự nhiên của người dùng thành câu lệnh SQL để truy vấn dữ liệu.
 
-=== LƯỢC ĐỒ CƠ SỞ DỮ LIỆU (SCHEMA) ===
+<SCHEMA>
 ${schemaMetadata}
-=======================================
+</SCHEMA>
 
-=== CÂU HỎI CỦA NGƯỜI DÙNG ===
+<USER_QUERY>
 ${userQuery}
-=======================================
+</USER_QUERY>
 
-⚠️ CÁC QUY TẮC BẮT BUỘC PHẢI TUÂN THỦ:
-1. TUYỆT ĐỐI KHÔNG TỰ BỊA RA TÊN CỘT HOẶC TÊN BẢNG. Chỉ được phép sử dụng CHÍNH XÁC các bảng và cột được liệt kê trong Schema ở trên.
-2. Ví dụ: Nếu Schema ghi cột là 'id', bạn PHẢI dùng 'id', không được tự ý đổi thành 'customer_id'. Nếu Schema ghi là 'name', không được đổi thành 'customer_name'.
-3. Trả về kết quả dưới dạng JSON thuần túy, có các khóa sau:
-   - "sql_query": Câu lệnh SQL chuẩn PostgreSQL.
-   - "chart_type": "bar", "pie", "line" hoặc "table" tùy thuộc vào dữ liệu.
-   - "explanation": Giải thích ngắn gọn bằng tiếng Việt.
+BẮT BUỘC TUÂN THỦ (NẾU SAI HỆ THỐNG SẼ SẬP):
+1. BƯỚC ĐỐI CHIẾU: Trước khi viết SELECT, bạn phải dò từng tên cột dự định viết xem có KHỚP CHÍNH XÁC TỪNG KÝ TỰ với danh sách cột trong phần <SCHEMA> không.
+2. CHỐNG ẢO GIÁC: Tuyệt đối không tự động nối tên bảng vào tên cột (Ví dụ: Nếu Schema chỉ ghi là 'name', phải dùng 'name', KHÔNG được tự ý viết thành 'product_name').
+3. Trả về kết quả dưới dạng JSON thuần túy, định dạng như sau:
+{
+   "sql_query": "Câu lệnh SQL chuẩn PostgreSQL",
+   "chart_type": "bar", // Chọn "bar", "pie", "line" hoặc "table"
+   "explanation": "Mô tả và nhận xét tổng quát"
+}
 `;
 
     try {
