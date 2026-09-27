@@ -58,7 +58,7 @@ export class OrchestratorService {
       console.log(`[Orchestrator] SQL an toàn: ${safeSql}`);
 
       // Bước 4: Database
-      const dbData = await this.dbService.executeQuery(safeSql);
+      const dbData = await this.dbService.executeBizQuery(safeSql);
       console.log(`[Orchestrator] Đã lấy được ${dbData.length} dòng dữ liệu.`);
 
       let insights = "";

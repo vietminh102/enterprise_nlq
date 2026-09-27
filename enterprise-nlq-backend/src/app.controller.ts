@@ -4,7 +4,6 @@ import { AiService } from './ai/ai.service';
 
 @Controller()
 export class AppController {
-  // Tiêm DatabaseService vào để sử dụng
   constructor(private readonly dbService: DatabaseService,
   private readonly aiService: AiService,
   ) {}
@@ -13,7 +12,7 @@ export class AppController {
   async testDatabase() {
     try {
       // Chạy thử một lệnh SQL siêu cơ bản
-      const result = await this.dbService.executeQuery('SELECT NOW()');
+      const result = await this.dbService.executeBizQuery('SELECT NOW()');
       
       return {
         status: 'Thành công',
