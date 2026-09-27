@@ -27,10 +27,9 @@ export class OrchestratorService {
         console.warn(`[Orchestrator] ⚠️ CẢNH BÁO: Không tìm thấy Schema nào trong Vector DB.`);
       }
 
-      // XỬ LÝ AN TOÀN: Nếu schemas là mảng Object, ta cần trích xuất đúng cột chứa nội dung lược đồ (VD: description, schema_info, v.v.)
+      
       const schemaContext = schemas.map((item: any) => {
         if (typeof item === 'string') return item;
-        // Sửa 'description' thành tên cột lưu Schema thực tế trong bảng enterprise_embeddings của bạn
         return item.description || item.schema_info || item.content || JSON.stringify(item); 
       }).join('\n');
 
@@ -59,22 +58,53 @@ export class OrchestratorService {
       console.log(`[Orchestrator] SQL an toàn: ${safeSql}`);
 
       // Bước 4: Database
-      const data = await this.dbService.executeQuery(safeSql);
-      console.log(`[Orchestrator] Đã lấy được ${data.length} dòng dữ liệu.`);
+      const dbData = await this.dbService.executeQuery(safeSql);
+      console.log(`[Orchestrator] Đã lấy được ${dbData.length} dòng dữ liệu.`);
 
-      // Bước 5: Trả về kết quả
+      let insights = "";
+      if (dbData && dbData.length > 0) {
+        console.log(`[Orchestrator] Đang nhờ AI phân tích số liệu thực tế...`);
+        insights = await this.aiService.generateDataInsights(question, dbData);
+      }
       return {
         success: true,
         question: question,
         generated_sql: safeSql,
         chart_type: aiResultObj.chart_type,
-        explanation: aiResultObj.explanation,
-        data: data
+        explanation: insights,
+        data: dbData
       };
 
     } catch (error: any) {
       console.error('[Orchestrator] Lỗi hệ thống:', error.message);
-      throw new InternalServerErrorException(error.message);
+      
+      const errorMsg = error.message?.toLowerCase() || '';
+
+      // 1. Nhận diện lỗi Thêm/Sửa/Xóa từ Guardrails HOẶC vi phạm an toàn từ AI
+      if (
+        errorMsg.includes('safety_violation') || 
+        errorMsg.includes('vi phạm bảo mật') || 
+        errorMsg.includes('chỉ cho phép lệnh select')
+      ) {
+        return { 
+          error: "Yêu cầu bị chặn do vi phạm quy định bảo vệ dữ liệu (Phát hiện thao tác Thêm/Sửa/Xóa).", 
+          error_type: "SAFETY_VIOLATION" 
+        };
+      }
+      
+      // 2. Nhận diện lỗi đã đổi hết các Model nhưng vẫn quá tải
+      if (errorMsg.includes('all_models_overloaded')) {
+        return { 
+          error: "Hệ thống AI hiện đang quá tải. Đã thử tự động chuyển đổi qua lại giữa các phiên bản nhưng không thành công. Vui lòng thử lại sau vài phút.", 
+          error_type: "LIMIT_REACHED" 
+        };
+      }
+
+      // 3. Xử lý các lỗi khác
+      return { 
+        error: error.message || "Lỗi hệ thống không xác định.", 
+        error_type: "UNKNOWN" 
+      };
     }
   }
 }
