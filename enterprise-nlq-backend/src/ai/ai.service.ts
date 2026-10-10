@@ -1,120 +1,134 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { GoogleGenerativeAI, SchemaType, Schema} from '@google/generative-ai';
+import { GoogleGenerativeAI, SchemaType, Schema } from '@google/generative-ai';
+import * as crypto from 'crypto';
 
 @Injectable()
 export class AiService {
+  private readonly logger = new Logger(AiService.name);
   private genAI: GoogleGenerativeAI;
-  private readonly fallbackModels = [
-    'gemini-3.5-flash-lite',
-    'gemini-3.5-flash',
-    'gemini-3.1-flash-lite',
-    'gemini-2.5-flash',
-    'gemini-2.5-flash-lite'
-  ];
+  
+  // 1. Rút gọn số lượng Model (Chỉ giữ 2 bản: Nhanh và Thông minh)
+  private readonly FAST_MODEL = 'gemini-3.5-flash-lite';
+  private readonly SMART_MODEL = 'gemini-3.5-flash';
 
-constructor(private configService: ConfigService) {
+  // 2. Cache Text-to-SQL để tránh gọi LLM lại với cùng một câu hỏi & schema
+  private readonly sqlCache = new Map<string, any>();
+  private readonly MAX_CACHE_SIZE = 500; 
+
+  constructor(private configService: ConfigService) {
     const apiKey = this.configService.get<string>('GEMINI_API_KEY');
-    if (!apiKey) {
-      console.warn('⚠️ Cảnh báo: Chưa tìm thấy GEMINI_API_KEY trong file .env');
-    }
-    
-    
+    if (!apiKey) this.logger.warn('⚠️ Chưa tìm thấy GEMINI_API_KEY');
     this.genAI = new GoogleGenerativeAI(apiKey || '');
   }
 
+  // Tiện ích: Tạo MD5 key cho Cache
+  private generateCacheKey(query: string, schema: string): string {
+    return crypto.createHash('md5').update((query + schema).toLowerCase()).digest('hex');
+  }
+
+  // Tiện ích: Ép Timeout ngắt lượt gọi AI nếu bị treo
+  private async executeWithTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
+    let timer: NodeJS.Timeout;
+    const timeoutPromise = new Promise<never>((_, reject) => {
+      timer = setTimeout(() => reject(new Error('AI_TIMEOUT')), ms);
+    });
+    return Promise.race([promise, timeoutPromise]).finally(() => clearTimeout(timer));
+  }
+
+  // Đánh giá nhanh độ phức tạp để chọn Model
+  private isComplexQuery(query: string): boolean {
+    const complexKeywords = ['thống kê', 'tổng', 'trung bình', 'phân tích', 'tỷ lệ', 'nhóm', 'so sánh'];
+    return query.length > 50 || complexKeywords.some(k => query.toLowerCase().includes(k));
+  }
+
+  /* --- BƯỚC 1: SINH SQL --- */
   async generateSql(userQuery: string, schemaMetadata: string): Promise<any> {
-    const prompt = `
-Bạn là một chuyên gia phân tích dữ liệu và viết mã SQL (PostgreSQL) xuất sắc.
-Nhiệm vụ của bạn là chuyển đổi câu hỏi bằng ngôn ngữ tự nhiên của người dùng thành câu lệnh SQL để truy vấn dữ liệu.
+    const cacheKey = this.generateCacheKey(userQuery, schemaMetadata);
+    if (this.sqlCache.has(cacheKey)) {
+      this.logger.log(`[AI Cache Hit] Trả về SQL ngay lập tức cho câu hỏi.`);
+      return this.sqlCache.get(cacheKey);
+    }
 
-<SCHEMA>
-${schemaMetadata}
-</SCHEMA>
+    // 3. Prompt cực ngắn gọn (Tiết kiệm Token & Thời gian đọc)
+    const prompt = `Viết SQL (PostgreSQL) từ yêu cầu.
+Schema: ${schemaMetadata}
+Hỏi: "${userQuery}"
+Bắt buộc: 1. Cột phải khớp chính xác Schema. 2. Không tự bịa tên cột.`;
 
-<USER_QUERY>
-${userQuery}
-</USER_QUERY>
-
-BẮT BUỘC TUÂN THỦ (NẾU SAI HỆ THỐNG SẼ SẬP):
-1. BƯỚC ĐỐI CHIẾU: Trước khi viết SELECT, bạn phải dò từng tên cột dự định viết xem có KHỚP CHÍNH XÁC TỪNG KÝ TỰ với danh sách cột trong phần <SCHEMA> không.
-2. CHỐNG ẢO GIÁC: Tuyệt đối không tự động nối tên bảng vào tên cột (Ví dụ: Nếu Schema chỉ ghi là 'name', phải dùng 'name', KHÔNG được tự ý viết thành 'product_name').
-`;
-
-   
     const responseSchema: Schema = {
       type: SchemaType.OBJECT,
       properties: {
         sql_query: { type: SchemaType.STRING },
-        chart_type: { type: SchemaType.STRING, description: "bar, pie, line hoặc table" },
+        chart_type: { type: SchemaType.STRING, description: "bar, pie, line, table" },
       },
       required: ["sql_query", "chart_type"],
     };
 
-    for (const modelName of this.fallbackModels) {
+    // 4. Chọn model dựa trên độ khó (Đơn giản dùng Lite, Phức tạp dùng Flash thường)
+    const modelsToTry = this.isComplexQuery(userQuery) 
+      ? [this.SMART_MODEL, this.FAST_MODEL] 
+      : [this.FAST_MODEL, this.SMART_MODEL];
+
+    for (const modelName of modelsToTry) {
       try {
-        const currentModel = this.genAI.getGenerativeModel({ 
+        const model = this.genAI.getGenerativeModel({ 
           model: modelName, 
           generationConfig: { responseMimeType: "application/json", responseSchema }
         });
-        const result = await currentModel.generateContent(prompt);
-        return JSON.parse(result.response.text());
+        
+        // Timeout 6 giây cho SQL Generation
+        const result = await this.executeWithTimeout(model.generateContent(prompt), 6000);
+        const parsedResult = JSON.parse(result.response.text());
+
+        // Quản lý bộ nhớ Cache chống Memory Leak
+        if (this.sqlCache.size >= this.MAX_CACHE_SIZE) this.sqlCache.clear();
+        this.sqlCache.set(cacheKey, parsedResult);
+
+        return parsedResult;
       } catch (error: any) {
-        if (error.message?.toLowerCase().match(/(429|503|quota|limit|overloaded|high demand)/)) {
-          console.warn(`⏳ Model ${modelName} đang bận, thử model khác...`);
+        if (error.message.includes('AI_TIMEOUT') || error.message.match(/(429|503|overloaded)/)) {
+          this.logger.warn(`⏳ Model ${modelName} bận/timeout. Chuyển fallback...`);
           continue; 
         }
-        throw new Error('Lỗi AI: ' + error.message);
+        throw new Error(`Lỗi sinh SQL: ${error.message}`);
       }
     }
     throw new Error('ALL_MODELS_OVERLOADED');
   }
 
-  // AI ĐỌC DỮ LIỆU THẬT VÀ PHÂN TÍCH 
+  /* --- BƯỚC 2: PHÂN TÍCH SỐ LIỆU --- */
   async generateDataInsights(userQuery: string, dbData: any[]): Promise<string> {
+    if (!dbData || dbData.length === 0) return "";
+    
     try {
       const dataToAnalyze = dbData.length > 50 ? dbData.slice(0, 50) : dbData;
-
-      // 1. SỬA LỖI BIGINT: Ép kiểu BigInt về String an toàn trước khi nạp cho AI
       const safeJsonString = JSON.stringify(dataToAnalyze, (key, value) =>
         typeof value === 'bigint' ? value.toString() : value
       );
 
-      const prompt = `
-Bạn là một Giám đốc Kinh doanh (Business Analyst).
-Câu hỏi của sếp: "${userQuery}"
-Dưới đây là BẢNG SỐ LIỆU THỰC TẾ vừa truy xuất được:
-${safeJsonString}
+      // Prompt cực ngắn gọn, định hướng trực tiếp
+      const prompt = `Phân tích kinh doanh.
+Hỏi: "${userQuery}"
+Data: ${safeJsonString}
+Yêu cầu: Viết 3-4 câu nhận xét trực tiếp vào con số nổi bật và định hướng kinh doanh. Không giải thích kỹ thuật/SQL.`;
 
-Hãy viết một đoạn nhận xét về dữ liệu một cách nhìn tổng quát và phân tích thật hoàn hảo (Tổng quát và cự thể không lan man 4 - 5 câu).
-YÊU CẦU:
-1. Phân tích trực tiếp vào các CON SỐ nổi bật.
-2. Đưa ra định hướng kinh doanh.
-3. TUYỆT ĐỐI KHÔNG giải thích biểu đồ hay code SQL.
-4. Hãy viết như một con người một cách tự nhiên nhất.
-`;
+      const modelsToTry = [this.FAST_MODEL, this.SMART_MODEL]; // Luôn ưu tiên Fast model cho Text generation
 
-      for (const modelName of this.fallbackModels) {
+      for (const modelName of modelsToTry) {
         try {
-          // 2. THÊM LOG ĐỂ THEO DÕI AI CÓ BỊ TREO HAY KHÔNG
-          console.log(`[AI Insights] Đang nhờ model ${modelName} viết nhận xét... (vui lòng đợi)`);
-          
-          const currentModel = this.genAI.getGenerativeModel({ model: modelName });
-          const result = await currentModel.generateContent(prompt);
-          const insightText = result.response.text();
-          
-          console.log(`[AI Insights] Hoàn thành phân tích!`);
-          return insightText;
-          
+          const model = this.genAI.getGenerativeModel({ model: modelName });
+          // Timeout 4 giây cho quá trình viết nhận xét
+          const result = await this.executeWithTimeout(model.generateContent(prompt), 4000);
+          return result.response.text();
         } catch (error: any) {
-          console.warn(`[AI Insights] Model ${modelName} thất bại:`, error.message);
-          // Nếu quá tải thì chạy tiếp vòng lặp sang model khác
-          if (error.message?.toLowerCase().match(/(429|503|quota|limit|overloaded)/)) continue;
+          if (error.message.includes('AI_TIMEOUT') || error.message.match(/(429|503|overloaded)/)) continue;
         }
       }
-      return "Hệ thống AI hiện đang quá tải, không thể đưa ra nhận xét chiến lược lúc này.";
-    } catch (fatalError: any) {
-      console.error('[AI Insights] Lỗi nghiêm trọng khi dịch dữ liệu:', fatalError.message);
-      return "Không thể nhận xét do dữ liệu trả về chứa định dạng phức tạp.";
+      return "Hệ thống AI hiện đang bận, không thể đưa ra nhận xét lúc này.";
+    } catch (error: any) {
+      this.logger.error('[AI Insights] Lỗi xử lý:', error.message);
+      return "Không thể nhận xét do định dạng dữ liệu quá phức tạp.";
     }
-}}
+  }
+}
