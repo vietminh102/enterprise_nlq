@@ -29,7 +29,7 @@ export class OrchestratorService {
           WHERE status = 'SUCCESS' 
             AND (
               similarity(LOWER(natural_query), LOWER($1)) > 0.70
-              OR 
+              OR  
               word_similarity(LOWER($1), LOWER(natural_query)) > 0.75
             )
           ORDER BY similarity(LOWER(natural_query), LOWER($1)) DESC 
@@ -74,8 +74,24 @@ export class OrchestratorService {
 
       console.log(`[Orchestrator] Đã tổng hợp Schema dài ${schemaContext.length} ký tự.`);
 
+      let glossaryContext = "";
+      try {
+        const glossaryQuery = `SELECT term_name, definition, sql_logic FROM business_glossary`;
+        const glossaryData = await this.dbService.executeCoreQuery(glossaryQuery);
+        
+        if (glossaryData && glossaryData.length > 0) {
+          glossaryContext = glossaryData.map((item: any) => 
+            `- Khi người dùng nhắc đến "${item.term_name}": Định nghĩa là "${item.definition}". Hãy áp dụng điều kiện SQL: [${item.sql_logic}]`
+          ).join('\n');
+          console.log(`[Orchestrator] Đã nạp ${glossaryData.length} thuật ngữ nghiệp vụ.`);
+        }
+      } catch (err: any) {
+        console.warn(`[Orchestrator] Lỗi khi lấy Glossary (Sẽ tiếp tục mà không có Glossary):`, err.message);
+      }
+
+
       // Bước 2: AI Text-to-SQL
-      const aiResponse = await this.aiService.generateSql(question, schemaContext);
+      const aiResponse = await this.aiService.generateSql(question, schemaContext,glossaryContext);
       
       let aiResultObj;
       try {

@@ -23,14 +23,19 @@ constructor(private configService: ConfigService) {
     this.genAI = new GoogleGenerativeAI(apiKey || '');
   }
 
-  async generateSql(userQuery: string, schemaMetadata: string): Promise<any> {
+  async generateSql(userQuery: string, schemaMetadata: string,glossaryContext: string = ""): Promise<any> {
     const prompt = `
-Bạn là một chuyên gia phân tích dữ liệu và viết mã SQL (PostgreSQL) xuất sắc.
+Bạn là một chuyên gia phân tích dữ liệu và viết mã SQL xuất sắc.
 Nhiệm vụ của bạn là chuyển đổi câu hỏi bằng ngôn ngữ tự nhiên của người dùng thành câu lệnh SQL để truy vấn dữ liệu.
 
 <SCHEMA>
 ${schemaMetadata}
 </SCHEMA>
+
+<BUSINESS_GLOSSARY>
+Chú ý các định nghĩa nghiệp vụ nội bộ sau đây để áp dụng vào câu lệnh SQL:
+${glossaryContext}
+</BUSINESS_GLOSSARY>
 
 <USER_QUERY>
 ${userQuery}
@@ -39,6 +44,7 @@ ${userQuery}
 BẮT BUỘC TUÂN THỦ (NẾU SAI HỆ THỐNG SẼ SẬP):
 1. BƯỚC ĐỐI CHIẾU: Trước khi viết SELECT, bạn phải dò từng tên cột dự định viết xem có KHỚP CHÍNH XÁC TỪNG KÝ TỰ với danh sách cột trong phần <SCHEMA> không.
 2. CHỐNG ẢO GIÁC: Tuyệt đối không tự động nối tên bảng vào tên cột (Ví dụ: Nếu Schema chỉ ghi là 'name', phải dùng 'name', KHÔNG được tự ý viết thành 'product_name').
+3. Nếu câu hỏi có chứa từ khóa trong BUSINESS_GLOSSARY, hãy sử dụng chính xác logic SQL được cung cấp.
 `;
 
    
@@ -86,7 +92,7 @@ Câu hỏi của sếp: "${userQuery}"
 Dưới đây là BẢNG SỐ LIỆU THỰC TẾ vừa truy xuất được:
 ${safeJsonString}
 
-Hãy viết một đoạn nhận xét về dữ liệu một cách nhìn tổng quát và phân tích thật hoàn hảo (Tổng quát và cự thể không lan man 4 - 5 câu).
+Hãy viết một đoạn nhận xét về dữ liệu một cách nhìn tổng quát và phân tích thật hoàn hảo (Tổng quát và cụ thể không lan man 4 - 5 câu).
 YÊU CẦU:
 1. Phân tích trực tiếp vào các CON SỐ nổi bật.
 2. Đưa ra định hướng kinh doanh.
@@ -96,7 +102,6 @@ YÊU CẦU:
 
       for (const modelName of this.fallbackModels) {
         try {
-          // 2. THÊM LOG ĐỂ THEO DÕI AI CÓ BỊ TREO HAY KHÔNG
           console.log(`[AI Insights] Đang nhờ model ${modelName} viết nhận xét... (vui lòng đợi)`);
           
           const currentModel = this.genAI.getGenerativeModel({ model: modelName });
@@ -108,7 +113,6 @@ YÊU CẦU:
           
         } catch (error: any) {
           console.warn(`[AI Insights] Model ${modelName} thất bại:`, error.message);
-          // Nếu quá tải thì chạy tiếp vòng lặp sang model khác
           if (error.message?.toLowerCase().match(/(429|503|quota|limit|overloaded)/)) continue;
         }
       }
