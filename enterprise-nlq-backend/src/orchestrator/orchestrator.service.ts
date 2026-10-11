@@ -13,51 +13,13 @@ export class OrchestratorService {
     private readonly dbService: DatabaseService,
   ) {}
 
-  async processNaturalLanguageQuery(question: string) {
+  async processNaturalLanguageQuery(question: string, history?: any[]) {
     const startTime = Date.now();
     let generatedSqlForLog = ''; 
 
     try {
       console.log(`[Orchestrator] Nhận câu hỏi: "${question}"`);
 
-      // TÌM KIẾM TRONG CACHE LỊCH SỬ
-  
-      try {
-        const cacheCheckSql = `
-          SELECT generated_sql, chart_type, explanation 
-          FROM audit_logs 
-          WHERE status = 'SUCCESS' 
-            AND (
-              similarity(LOWER(natural_query), LOWER($1)) > 0.70
-              OR  
-              word_similarity(LOWER($1), LOWER(natural_query)) > 0.75
-            )
-          ORDER BY similarity(LOWER(natural_query), LOWER($1)) DESC 
-          LIMIT 1;
-        `;
-        const cachedLogs = await this.dbService.executeCoreQuery(cacheCheckSql, [question]);
-        
-        if (cachedLogs && cachedLogs.length > 0) {
-          const cache = cachedLogs[0];
-          console.log(`[Orchestrator] ⚡ HIT CACHE! Tái sử dụng SQL từ lịch sử cho câu hỏi này.`);
-          
-          // Chạy câu lệnh SQL cũ để lấy DỮ LIỆU THỰC TẾ MỚI NHẤT từ DB
-          const freshData = await this.dbService.executeBizQuery(cache.generated_sql);
-          
-          return {
-            success: true,
-            question: question,
-            generated_sql: cache.generated_sql,
-            chart_type: cache.chart_type,
-            explanation: cache.explanation,
-            data: freshData,
-            is_cached: true 
-          };
-        }
-      } catch (cacheError: any) {
-        console.warn(`[Orchestrator] Bỏ qua Cache do lỗi (Sẽ tiếp tục gọi AI):`, cacheError.message);
-      }
-      // ==========================================
 
       // Bước 1: RAG - Tìm Schema liên quan
       const schemas = await this.vectorSearchService.findRelevantSchemas(question);
@@ -91,7 +53,7 @@ export class OrchestratorService {
 
 
       // Bước 2: AI Text-to-SQL
-      const aiResponse = await this.aiService.generateSql(question, schemaContext,glossaryContext);
+      const aiResponse = await this.aiService.generateSql(question, schemaContext,glossaryContext,history);
       
       let aiResultObj;
       try {

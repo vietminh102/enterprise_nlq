@@ -23,7 +23,19 @@ constructor(private configService: ConfigService) {
     this.genAI = new GoogleGenerativeAI(apiKey || '');
   }
 
-  async generateSql(userQuery: string, schemaMetadata: string,glossaryContext: string = ""): Promise<any> {
+  async generateSql(userQuery: string, schemaMetadata: string,glossaryContext: string = "",history: any[] = []): Promise<any> {
+    // 2. Format lại lịch sử chat thành dạng Text cho AI đọc
+    let historyPrompt = "";
+    if (history && history.length > 1) {
+      historyPrompt = "\n<CHAT_HISTORY>\nDưới đây là lịch sử các câu hỏi trước đó để bạn hiểu ngữ cảnh (Ví dụ: 'trong các sản phẩm trên' nghĩa là áp dụng thêm điều kiện (WHERE/AND) từ câu lệnh SQL của lượt trước):\n";
+      
+      // Bỏ câu hỏi cuối cùng vì nó chính là userQuery hiện tại
+      const previousHistory = history.slice(0, -1); 
+      previousHistory.forEach((msg, index) => {
+        historyPrompt += `Lượt ${index + 1} - ${msg.role === 'user' ? 'Người dùng hỏi' : 'Hệ thống trả lời'}: ${msg.content}\n`;
+      });
+      historyPrompt += "</CHAT_HISTORY>\n";
+    }
     const prompt = `
 Bạn là một chuyên gia phân tích dữ liệu và viết mã SQL xuất sắc.
 Nhiệm vụ của bạn là chuyển đổi câu hỏi bằng ngôn ngữ tự nhiên của người dùng thành câu lệnh SQL để truy vấn dữ liệu.
@@ -36,6 +48,7 @@ ${schemaMetadata}
 Chú ý các định nghĩa nghiệp vụ nội bộ sau đây để áp dụng vào câu lệnh SQL:
 ${glossaryContext}
 </BUSINESS_GLOSSARY>
+${historyPrompt}
 
 <USER_QUERY>
 ${userQuery}
@@ -45,6 +58,7 @@ BẮT BUỘC TUÂN THỦ (NẾU SAI HỆ THỐNG SẼ SẬP):
 1. BƯỚC ĐỐI CHIẾU: Trước khi viết SELECT, bạn phải dò từng tên cột dự định viết xem có KHỚP CHÍNH XÁC TỪNG KÝ TỰ với danh sách cột trong phần <SCHEMA> không.
 2. CHỐNG ẢO GIÁC: Tuyệt đối không tự động nối tên bảng vào tên cột (Ví dụ: Nếu Schema chỉ ghi là 'name', phải dùng 'name', KHÔNG được tự ý viết thành 'product_name').
 3. Nếu câu hỏi có chứa từ khóa trong BUSINESS_GLOSSARY, hãy sử dụng chính xác logic SQL được cung cấp.
+4. Nếu câu hỏi yêu cầu lọc từ "các kết quả trên", hãy viết mệnh đề WHERE bao gồm cả điều kiện của câu hỏi trước đó để giữ đúng luồng phân tích.
 `;
 
    
