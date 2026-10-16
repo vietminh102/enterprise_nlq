@@ -5,7 +5,7 @@ import { ReportGeneratorService } from '../report-generator/report-generator.ser
 import { DatabaseService } from '../database/database.service';
 import { VectorSearchService } from '../vector-search/vector-search.service';
 import * as fs from 'fs';
-
+import * as crypto from 'crypto';
 @Injectable()
 export class CronSchedulerService {
   private readonly logger = new Logger(CronSchedulerService.name);
@@ -58,7 +58,11 @@ export class CronSchedulerService {
 
     try {
       const autoQuery = "Lấy danh sách 5 khách hàng mới nhất.";
-      const reportData = await this.orchestratorService.processNaturalLanguageQuery(autoQuery);
+      const cronSessionId = crypto.randomUUID();
+      const reportData = await this.orchestratorService.processNaturalLanguageQuery(
+    cronSessionId, 
+    autoQuery
+);
 
       if (reportData.data && reportData.data.length > 0) {
         const excelBuffer = await this.reportGeneratorService.generateExcelReport(reportData.data, 'Báo Cáo Tuần');

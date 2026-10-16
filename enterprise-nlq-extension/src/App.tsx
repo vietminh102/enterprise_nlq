@@ -1,8 +1,8 @@
-import { useState, useRef, useEffect } from 'react';
+import { useState, useRef, useEffect} from 'react';
 import axios from 'axios';
 import { 
   Send, Database, Loader2, 
-  LineChart as LineChartIcon, ShieldAlert, AlertTriangle, User, Bot 
+  LineChart as LineChartIcon, ShieldAlert, AlertTriangle, User, Bot, Plus, MessageSquare, Menu
 } from 'lucide-react';
 import { 
   BarChart, Bar, 
@@ -11,11 +11,11 @@ import {
   XAxis, YAxis, Tooltip, CartesianGrid, ResponsiveContainer 
 } from 'recharts';
 
-// --- ĐỊNH NGHĨA CẤU TRÚC 1 LƯỢT CHAT ---
+// --- ĐỊNH NGHĨA CẤU TRÚC KIỂU DỮ LIỆU ---
 interface ChatMessage {
   id: string;
   role: 'user' | 'assistant';
-  content: string; // Nội dung câu hỏi (User) hoặc nội dung Lỗi (Assistant)
+  content: string; 
   data?: Record<string, string | number>[];
   chart_type?: string;
   explanation?: string;
@@ -23,53 +23,116 @@ interface ChatMessage {
   error_type?: string; 
 }
 
+interface ChatSession {
+  session_id: string;
+  title: string;
+}
+
 export default function App() {
-  // Thay vì lưu 1 response, ta lưu một mảng các lượt hội thoại
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [inputValue, setInputValue] = useState('');
   const [loading, setLoading] = useState(false);
+  
+  // Các state quản lý Sidebar
+  const [sessions, setSessions] = useState<ChatSession[]>([]);
+  const [isSidebarOpen, setIsSidebarOpen] = useState(true);
+  const [sessionId, setSessionId] = useState<string | null>(null);
 
-  // Tham chiếu để tự động cuộn xuống tin nhắn mới nhất
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   };
+  
   useEffect(() => {
     scrollToBottom();
   }, [messages]);
 
-  // --- HÀM XỬ LÝ GỬI TIN NHẮN VÀ GỌI API ---
+
+// --- 1. TẢI DANH SÁCH SIDEBAR KHI MỞ TRANG ---
+  useEffect(() => {
+    let isMounted = true; // Cờ theo dõi trạng thái Component
+
+    const loadSessionsOnMount = async () => {
+      try {
+        const res = await axios.get('http://localhost:3000/api/query/sessions');
+        // React sẽ hiểu đây là state update bất đồng bộ (sau khi await) -> Sẽ không báo lỗi
+        if (res.data.success && isMounted) {
+          setSessions(res.data.sessions);
+        }
+      } catch (err) {
+        console.error("Không tải được danh sách chat", err);
+      }
+    };
+
+    loadSessionsOnMount();
+
+    // Hàm cleanup (Dọn dẹp khi tắt trang để chống rò rỉ bộ nhớ)
+    return () => {
+      isMounted = false;
+    };
+  }, []);
+
+  // --- 2. TẢI LỊCH SỬ CHAT KHI CLICK VÀO SIDEBAR ---
+  const loadChatHistory = async (id: string) => {
+    setSessionId(id);
+    setMessages([]); // Xóa màn hình tạm thời lúc đợi data
+    setLoading(true);
+    
+    try {
+      const res = await axios.get(`http://localhost:3000/api/query/history/${id}`);
+      if (res.data.success && res.data.history) {
+        // Map dữ liệu từ Database lên giao diện
+          const loadedMessages: ChatMessage[] = res.data.history.map((msg: Omit<ChatMessage, 'id'>, index: number) => ({
+          id: `history-${index}`,
+          role: msg.role,
+          content: msg.content,
+          chart_type: msg.chart_type,
+          explanation: msg.explanation || msg.content 
+        }));
+        setMessages(loadedMessages);
+      }
+    } catch (err) {
+      console.error("Lỗi tải lịch sử chat", err);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+
+  // --- 3. TẠO ĐOẠN CHAT MỚI ---
+  const handleNewChat = () => {
+    setSessionId(null); // Trả ID về null để lần gửi tới sẽ tự sinh ID mới
+    setMessages([]); 
+    if (window.innerWidth < 768) setIsSidebarOpen(false); // Đóng sidebar trên mobile
+  };
+
+  // --- 4. HÀM XỬ LÝ GỬI TIN NHẮN ---
   const handleQuery = async () => {
     if (!inputValue.trim()) return;
     
-    // 1. Tạo tin nhắn của người dùng và đưa ngay lên màn hình
+    // Nếu là đoạn chat mới toanh, tự sinh ID. Nếu đang ở đoạn chat cũ, dùng ID cũ.
+    const currentSessionId = sessionId || crypto.randomUUID();
+    if (!sessionId) setSessionId(currentSessionId);
+
     const userMsg: ChatMessage = {
       id: Date.now().toString(),
       role: 'user',
       content: inputValue
     };
     
-    // Lưu tạm lịch sử cũ để truyền xuống DB (Nếu Backend của bạn đã hỗ trợ FR-03 nhận history)
     const historyToGửi = [...messages, userMsg];
-    
     setMessages(historyToGửi);
     setInputValue('');
     setLoading(true);
     
     try {
-      // 2. Gọi API (Có thể gửi kèm history nếu cần thiết)
       const res = await axios.post('http://localhost:3000/api/query', {
+        sessionId: currentSessionId,
         question: userMsg.content,
-        // Ép kiểu chỉ gửi lịch sử là text để tránh làm phình to Request
-        history: historyToGửi.map(msg => ({ 
-           role: msg.role, 
-           content: msg.content 
-        })) 
+        history: messages.map(msg => ({ role: msg.role, content: msg.content })) 
       });
       
       const responseData = res.data;
-
-      // 3. Tạo tin nhắn của Trợ lý từ kết quả trả về
       const assistantMsg: ChatMessage = {
         id: (Date.now() + 1).toString(),
         role: 'assistant',
@@ -83,10 +146,16 @@ export default function App() {
 
       setMessages(prev => [...prev, assistantMsg]);
 
-    } catch (error) { // Xóa chữ ': any' ở đây
+      // NẾU LÀ CÂU HỎI ĐẦU TIÊN CỦA ĐOẠN CHAT MỚI -> TẢI LẠI SIDEBAR ĐỂ HIỆN TIÊU ĐỀ
+if (messages.length === 0) {
+        setSessions(prev => [
+          { session_id: currentSessionId, title: userMsg.content },
+          ...prev
+        ]);
+      }
+
+    } catch (error) { 
       console.error('Lỗi truy vấn:', error);
-      
-      // Xử lý khi lỗi gọi API theo chuẩn TypeScript an toàn
       let errorMessage = 'Không thể kết nối đến máy chủ hoặc có lỗi xảy ra.';
       let errorType = 'UNKNOWN';
 
@@ -103,13 +172,12 @@ export default function App() {
         error_type: errorType
       };
       setMessages(prev => [...prev, errorMsg]);
-      
     } finally {
       setLoading(false);
     }
   };
 
-  // --- HÀM RENDER BIỂU ĐỒ (Dùng chung cho từng tin nhắn) ---
+  // --- HÀM RENDER BIỂU ĐỒ ---
   const renderChart = (msg: ChatMessage) => {
     if (!msg.data || msg.data.length === 0) return null;
 
@@ -190,153 +258,193 @@ export default function App() {
   };
 
   return (
-    <div className="flex flex-col h-screen bg-gray-50 font-sans">
-      {/* HEADER TÍM - GIỐNG TRONG ẢNH SDS */}
-      <header className="bg-purple-600 text-white p-4 shadow-md flex items-center gap-2 z-10">
-        <Database size={20} />
-        <h1 className="font-bold text-lg">Enterprise Assistant</h1>
-      </header>
-
-      {/* KHU VỰC HIỂN THỊ CHAT LIST */}
-      <div className="flex-1 overflow-y-auto p-4 space-y-6">
-        
-        {/* Tin nhắn chào mừng ban đầu */}
-        {messages.length === 0 && (
-          <div className="flex flex-col items-center justify-center h-full text-gray-400 space-y-4">
-            <Bot size={48} className="text-purple-300" />
-            <p className="text-center text-sm">Xin chào! Tôi là Trợ lý Dữ liệu Doanh nghiệp.<br/>Hãy đặt câu hỏi để tôi phân tích số liệu cho bạn nhé.</p>
-          </div>
-        )}
-
-        {messages.map((msg) => (
-          <div key={msg.id} className={`flex flex-col ${msg.role === 'user' ? 'items-end' : 'items-start'}`}>
-            
-            {/* 1. HIỂN THỊ TIN NHẮN CỦA USER */}
-            {msg.role === 'user' && (
-              <div className="flex gap-2 max-w-[80%]">
-                <div className="bg-purple-100 text-purple-900 px-4 py-2.5 rounded-2xl rounded-tr-sm shadow-sm">
-                  {msg.content}
-                </div>
-                <div className="w-8 h-8 rounded-full bg-purple-200 flex items-center justify-center shrink-0">
-                  <User size={16} className="text-purple-700" />
-                </div>
-              </div>
-            )}
-
-            {/* 2. HIỂN THỊ KẾT QUẢ CỦA ASSISTANT */}
-            {msg.role === 'assistant' && (
-              <div className="flex gap-3 w-full max-w-4xl">
-                <div className="w-8 h-8 rounded-full bg-blue-100 flex items-center justify-center shrink-0 mt-1">
-                  <Bot size={18} className="text-blue-600" />
-                </div>
-                
-                <div className="flex-1">
-                  {/* Nếu gặp lỗi */}
-                  {msg.error ? (
-                    <div className="animate-fade-in w-full">
-                      {msg.error_type === 'SAFETY_VIOLATION' ? (
-                        <div className="bg-red-50 text-red-800 p-5 rounded-xl border border-red-200 shadow-sm">
-                          <div className="flex items-center gap-2 mb-3 border-b border-red-200 pb-2">
-                            <ShieldAlert className="text-red-600" size={24} />
-                            <h2 className="font-bold text-lg">Hành động bị từ chối (Bảo vệ Dữ liệu)</h2>
-                          </div>
-                          <p className="text-sm mb-4">Hệ thống phát hiện bạn đang yêu cầu thực hiện các thao tác làm thay đổi cơ sở dữ liệu.</p>
-                        </div>
-                      ) : (
-                        <div className="bg-red-50 text-red-600 p-4 rounded-xl text-sm border border-red-100 flex gap-3 items-start">
-                          <AlertTriangle className="text-red-600 shrink-0 mt-0.5" size={20} />
-                          <div>{msg.error}</div>
-                        </div>
-                      )}
-                    </div>
-                  ) : 
-                  
-                  /* Nếu thành công (Hiện Bảng & Biểu đồ - KHUNG TRẮNG GIỐNG ẢNH SDS) */
-                  (
-                    <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-5 animate-fade-in w-full">
-                      {msg.explanation && (
-                        <div className="mb-4 p-3 bg-blue-50 border-l-4 border-blue-500 rounded-r-lg">
-                          <h3 className="text-blue-800 font-semibold text-sm mb-1">AI Nhận xét:</h3>
-                          <p className="text-blue-900 text-sm">{msg.explanation}</p>
-                        </div>
-                      )}
-
-                      {/* Bảng dữ liệu */}
-                      {msg.data && msg.data.length > 0 && (
-                        <div className="overflow-x-auto rounded-lg border border-gray-100">
-                          <table className="w-full text-left text-sm text-gray-600">
-                            <thead className="bg-gray-50 text-gray-700 uppercase text-xs font-semibold">
-                              <tr>
-                                {Object.keys(msg.data[0]).map((key) => (
-                                  <th key={key} className="px-4 py-3 border-b">{key}</th>
-                                ))}
-                              </tr>
-                            </thead>
-                            <tbody>
-                              {msg.data.map((row, idx) => (
-                                <tr key={idx} className="border-b last:border-0 hover:bg-gray-50">
-                                  {Object.values(row).map((val: unknown, colIdx) => (
-                                    <td key={colIdx} className="px-4 py-2 truncate max-w-50" title={String(val)}>{String(val)}</td>
-                                  ))}
-                                </tr>
-                              ))}
-                            </tbody>
-                          </table>
-                        </div>
-                      )}
-
-                      {/* Biểu đồ (Như ảnh SDS) */}
-                      {msg.chart_type && msg.chart_type !== 'table' && (
-                        <div className="mt-6 border-t pt-4">
-                          <h2 className="text-gray-700 font-medium flex items-center gap-2 mb-2">
-                            <LineChartIcon size={16} className="text-green-600" /> Trực quan hóa
-                          </h2>
-                          {renderChart(msg)}
-                        </div>
-                      )}
-                    </div>
-                  )}
-                </div>
-              </div>
-            )}
-          </div>
-        ))}
-
-        {/* Cục quay vòng vòng khi đang Loading */}
-        {loading && (
-          <div className="flex gap-3 w-full max-w-4xl">
-            <div className="w-8 h-8 rounded-full bg-blue-100 flex items-center justify-center shrink-0">
-              <Bot size={18} className="text-blue-600" />
-            </div>
-            <div className="bg-gray-100 px-4 py-3 rounded-xl flex items-center gap-2 text-gray-500 text-sm italic shadow-sm">
-              <Loader2 size={16} className="animate-spin text-purple-600" /> Hệ thống đang phân tích số liệu...
-            </div>
-          </div>
-        )}
-
-        <div ref={messagesEndRef} />
-      </div>
-
-      {/* KHU VỰC NHẬP CÂU HỎI (Thanh trắng dưới cùng) */}
-      <div className="p-4 bg-white border-t shadow-lg z-10">
-        <div className="relative flex items-center max-w-4xl mx-auto rounded-full bg-gray-50 border border-gray-300 focus-within:ring-2 ring-purple-400 focus-within:bg-white transition-all overflow-hidden p-1">
-          <input
-            type="text"
-            className="w-full pl-4 pr-12 py-2.5 bg-transparent text-sm outline-none text-gray-800"
-            placeholder="Lập thống kê top 5 sản phẩm có số lượng bán ra chạy nhất"
-            value={inputValue}
-            onChange={(e) => setInputValue(e.target.value)}
-            onKeyDown={(e) => e.key === 'Enter' && handleQuery()}
-            disabled={loading}
-          />
-          <button
-            onClick={handleQuery}
-            disabled={loading || !inputValue.trim()}
-            className="p-2.5 bg-purple-600 hover:bg-purple-700 text-white rounded-full transition-colors disabled:bg-gray-300 disabled:cursor-not-allowed ml-2 mr-1"
+    <div className="flex h-screen bg-gray-50 font-sans overflow-hidden">
+      
+      {/* ===================== SIDEBAR (Cột trái) ===================== */}
+      <div className={`${isSidebarOpen ? 'w-64' : 'w-0'} bg-gray-900 text-white transition-all duration-300 flex flex-col shrink-0 overflow-hidden`}>
+        {/* Nút Tạo Chat Mới */}
+        <div className="p-3">
+          <button 
+            onClick={handleNewChat}
+            className="w-full flex items-center gap-3 p-3 rounded-lg border border-gray-700 hover:bg-gray-800 transition-colors text-sm font-medium text-gray-200"
           >
-            <Send size={18} />
+            <Plus size={18} /> Đoạn chat mới
           </button>
         </div>
+
+        {/* Danh sách Lịch sử */}
+        <div className="flex-1 overflow-y-auto p-3 space-y-1">
+          <p className="text-xs text-gray-500 font-semibold mb-2 px-2 uppercase tracking-wider">Gần đây</p>
+          
+          {sessions.length === 0 && (
+            <p className="text-sm text-gray-500 px-2 italic">Chưa có dữ liệu</p>
+          )}
+
+          {sessions.map((session) => (
+            <button
+              key={session.session_id}
+              onClick={() => loadChatHistory(session.session_id)}
+              className={`w-full flex items-center gap-3 p-3 rounded-lg text-sm text-left truncate transition-colors ${
+                sessionId === session.session_id ? 'bg-gray-800 text-white font-medium' : 'text-gray-400 hover:bg-gray-800 hover:text-gray-200'
+              }`}
+            >
+              <MessageSquare size={16} className="shrink-0" />
+              <span className="truncate">{session.title}</span>
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {/* ===================== KHU VỰC CHAT CHÍNH (Cột phải) ===================== */}
+      <div className="flex-1 flex flex-col min-w-0 bg-white">
+        
+        {/* Header (Có nút bấm mở/đóng Sidebar) */}
+        <header className="bg-white border-b border-gray-200 p-4 flex items-center gap-3 shadow-sm z-10">
+          <button 
+            onClick={() => setIsSidebarOpen(!isSidebarOpen)} 
+            className="p-1.5 hover:bg-gray-100 rounded-md text-gray-600 transition-colors"
+          >
+            <Menu size={20} />
+          </button>
+          <div className="flex items-center gap-2">
+            <Database size={20} className="text-purple-600" />
+            <h1 className="font-bold text-lg text-gray-800">Enterprise Assistant</h1>
+          </div>
+        </header>
+
+        {/* Danh sách tin nhắn Chat */}
+        <div className="flex-1 overflow-y-auto p-4 md:p-6 space-y-6 bg-gray-50">
+          
+          {messages.length === 0 && (
+            <div className="flex flex-col items-center justify-center h-full text-gray-400 space-y-4">
+              <Bot size={48} className="text-purple-300" />
+              <p className="text-center text-sm">Xin chào! Tôi là Trợ lý Dữ liệu Doanh nghiệp.<br/>Hãy đặt câu hỏi để tôi phân tích số liệu cho bạn nhé.</p>
+            </div>
+          )}
+
+          {messages.map((msg) => (
+            <div key={msg.id} className={`flex flex-col ${msg.role === 'user' ? 'items-end' : 'items-start'}`}>
+              
+              {/* Tin nhắn USER */}
+              {msg.role === 'user' && (
+                <div className="flex gap-2 max-w-[85%] md:max-w-[70%]">
+                  <div className="bg-purple-100 text-purple-900 px-4 py-2.5 rounded-2xl rounded-tr-sm shadow-sm">
+                    {msg.content}
+                  </div>
+                  <div className="w-8 h-8 rounded-full bg-purple-200 flex items-center justify-center shrink-0">
+                    <User size={16} className="text-purple-700" />
+                  </div>
+                </div>
+              )}
+
+              {/* Tin nhắn ASSISTANT */}
+              {msg.role === 'assistant' && (
+                <div className="flex gap-3 w-full max-w-4xl">
+                  <div className="w-8 h-8 rounded-full bg-blue-100 flex items-center justify-center shrink-0 mt-1">
+                    <Bot size={18} className="text-blue-600" />
+                  </div>
+                  
+                  <div className="flex-1 min-w-0">
+                    {msg.error ? (
+                      <div className="animate-fade-in w-full">
+                        {msg.error_type === 'SAFETY_VIOLATION' ? (
+                          <div className="bg-red-50 text-red-800 p-5 rounded-xl border border-red-200 shadow-sm">
+                            <div className="flex items-center gap-2 mb-3 border-b border-red-200 pb-2">
+                              <ShieldAlert className="text-red-600" size={24} />
+                              <h2 className="font-bold text-lg">Hành động bị từ chối</h2>
+                            </div>
+                            <p className="text-sm mb-4">Hệ thống phát hiện bạn đang yêu cầu thực hiện các thao tác làm thay đổi cơ sở dữ liệu.</p>
+                          </div>
+                        ) : (
+                          <div className="bg-red-50 text-red-600 p-4 rounded-xl text-sm border border-red-100 flex gap-3 items-start">
+                            <AlertTriangle className="text-red-600 shrink-0 mt-0.5" size={20} />
+                            <div>{msg.error}</div>
+                          </div>
+                        )}
+                      </div>
+                    ) : (
+                      <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-5 animate-fade-in w-full overflow-hidden">
+                        {msg.explanation && (
+                          <div className="mb-4 p-3 bg-blue-50 border-l-4 border-blue-500 rounded-r-lg">
+                            <h3 className="text-blue-800 font-semibold text-sm mb-1">AI Nhận xét:</h3>
+                            <p className="text-blue-900 text-sm whitespace-pre-wrap">{msg.explanation}</p>
+                          </div>
+                        )}
+
+                        {msg.data && msg.data.length > 0 && (
+                          <div className="overflow-x-auto rounded-lg border border-gray-100">
+                            <table className="w-full text-left text-sm text-gray-600">
+                              <thead className="bg-gray-50 text-gray-700 uppercase text-xs font-semibold">
+                                <tr>
+                                  {Object.keys(msg.data[0]).map((key) => (
+                                    <th key={key} className="px-4 py-3 border-b whitespace-nowrap">{key}</th>
+                                  ))}
+                                </tr>
+                              </thead>
+                              <tbody>
+                                {msg.data.map((row, idx) => (
+                                  <tr key={idx} className="border-b last:border-0 hover:bg-gray-50">
+                                    {Object.values(row).map((val: unknown, colIdx) => (
+                                      <td key={colIdx} className="px-4 py-2 truncate max-w-xs" title={String(val)}>{String(val)}</td>
+                                    ))}
+                                  </tr>
+                                ))}
+                              </tbody>
+                            </table>
+                          </div>
+                        )}
+
+                        {msg.chart_type && msg.chart_type !== 'table' && (
+                          <div className="mt-6 border-t pt-4">
+                            <h2 className="text-gray-700 font-medium flex items-center gap-2 mb-2">
+                              <LineChartIcon size={16} className="text-green-600" /> Trực quan hóa
+                            </h2>
+                            {renderChart(msg)}
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
+            </div>
+          ))}
+
+          {loading && (
+            <div className="flex gap-3 w-full max-w-4xl">
+              <div className="w-8 h-8 rounded-full bg-blue-100 flex items-center justify-center shrink-0">
+                <Bot size={18} className="text-blue-600" />
+              </div>
+              <div className="bg-white border border-gray-200 px-4 py-3 rounded-xl flex items-center gap-2 text-gray-500 text-sm shadow-sm animate-pulse">
+                <Loader2 size={16} className="animate-spin text-purple-600" /> Hệ thống đang xử lý...
+              </div>
+            </div>
+          )}
+          <div ref={messagesEndRef} />
+        </div>
+
+        {/* Khung Input (Giữ nguyên) */}
+        <div className="p-4 bg-white border-t z-10">
+          <div className="relative flex items-center max-w-4xl mx-auto rounded-full bg-gray-50 border border-gray-300 focus-within:ring-2 ring-purple-400 focus-within:bg-white transition-all overflow-hidden p-1">
+            <input
+              type="text"
+              className="w-full pl-4 pr-12 py-2.5 bg-transparent text-sm outline-none text-gray-800"
+              placeholder="Nhập câu hỏi bằng ngôn ngữ tự nhiên..."
+              value={inputValue}
+              onChange={(e) => setInputValue(e.target.value)}
+              onKeyDown={(e) => e.key === 'Enter' && handleQuery()}
+              disabled={loading}
+            />
+            <button
+              onClick={handleQuery}
+              disabled={loading || !inputValue.trim()}
+              className="p-2.5 bg-purple-600 hover:bg-purple-700 text-white rounded-full transition-colors disabled:bg-gray-300 disabled:cursor-not-allowed ml-2 mr-1"
+            >
+              <Send size={18} />
+            </button>
+          </div>
+        </div>
+
       </div>
     </div>
   );

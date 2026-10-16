@@ -12,8 +12,39 @@ export class OrchestratorService {
     private readonly guardrailsService: GuardrailsService,
     private readonly dbService: DatabaseService,
   ) {}
+  async getChatHistory(sessionId: string) {
+    try {
+      const sql = `SELECT chat_history FROM audit_logs WHERE log_id = $1 LIMIT 1;`;
+      const result = await this.dbService.executeCoreQuery(sql, [sessionId]);
+      
+      if (result && result.length > 0 && result[0].chat_history) {
+        return { success: true, history: result[0].chat_history };
+      }
+      return { success: false, history: [] };
+    } catch (error: any) {
+      console.error('[Orchestrator] Lỗi khi lấy lịch sử:', error.message);
+      return { success: false, error: 'Không thể lấy lịch sử' };
+    }
+  }
+  
+  async getAllChatSessions() {
+    try {
+    const sql = `
+        SELECT log_id as session_id, natural_query as title 
+        FROM audit_logs 
+        WHERE log_id IS NOT NULL AND log_id::text NOT LIKE 'cron-%' 
+        ORDER BY log_id DESC 
+        LIMIT 50;
+      `;
+      const result = await this.dbService.executeCoreQuery(sql);
+      return { success: true, sessions: result || [] };
+    } catch (error: any) {
+      console.error('[Orchestrator] Lỗi khi lấy danh sách phiên:', error.message);
+      return { success: false, error: 'Không thể lấy danh sách' };
+    }
+  }
 
-  async processNaturalLanguageQuery(question: string, history?: any[]) {
+  async processNaturalLanguageQuery(sessionId: string,question: string, history?: any[]) {
     const startTime = Date.now();
     let generatedSqlForLog = ''; 
 
@@ -87,25 +118,40 @@ export class OrchestratorService {
       // ==========================================
       // BƯỚC 5: LƯU AUDIT LOG KÈM THEO CHART VÀ EXPLANATION
       // ==========================================
-      const executionTime = Date.now() - startTime;
+const executionTime = Date.now() - startTime;
       try {
-        const insertLogSql = `
-          INSERT INTO audit_logs (natural_query, generated_sql, execution_time, status, chart_type, explanation) 
-          VALUES ($1, $2, $3, $4, $5, $6)
+        const fullChatHistory = [
+          ...(history || []),
+          { role: 'user', content: question },
+          { 
+            role: 'assistant', 
+            content: insights || 'Đã truy xuất xong',
+            chart_type: aiResultObj.chart_type,
+            generated_sql: safeSql
+          }
+        ];
+
+        // Lệnh UPSERT ĐÃ ĐƯỢC LÀM SẠCH (Chỉ còn 5 cột)
+        const upsertLogSql = `
+          INSERT INTO audit_logs (log_id, natural_query, execution_time, status, chat_history) 
+          VALUES ($1, $2, $3, $4, $5)
+          ON CONFLICT (log_id) DO UPDATE SET 
+            chat_history = EXCLUDED.chat_history,
+            execution_time = audit_logs.execution_time + EXCLUDED.execution_time,
+            status = EXCLUDED.status;
         `;
-        await this.dbService.executeCoreQuery(insertLogSql, [
+        
+        await this.dbService.executeCoreQuery(upsertLogSql, [
+          sessionId, 
           question, 
-          safeSql, 
           executionTime, 
           'SUCCESS',
-          aiResultObj.chart_type, 
-          insights
+          JSON.stringify(fullChatHistory)
         ]);
-        console.log(`[Audit] Đã lưu log thành công (Thời gian: ${executionTime}ms).`);
+        console.log(`[Audit] Đã lưu log thành công.`);
       } catch (logError: any) {
         console.error('[Audit] Cảnh báo: Lỗi khi lưu audit_log:', logError.message);
       }
-      // ==========================================
 
       return {
         success: true,
@@ -118,51 +164,42 @@ export class OrchestratorService {
       };
 
     } catch (error: any) {
-      console.error('[Orchestrator] Lỗi hệ thống:', error.message);
       const errorMsg = error.message?.toLowerCase() || '';
-
       const executionTime = Date.now() - startTime;
       let status = 'DB_ERROR'; 
       
-      if (
-        errorMsg.includes('safety_violation') || 
-        errorMsg.includes('vi phạm bảo mật') || 
-        errorMsg.includes('chỉ cho phép lệnh select')
-      ) {
+      if (errorMsg.includes('safety_violation') || errorMsg.includes('vi phạm bảo mật')) {
         status = 'BLOCKED_BY_AST'; 
       }
 
+      // LƯU LỖI VÀO CHAT HISTORY (ĐÃ XÓA generated_sql KHỎI LỆNH)
       try {
-        const insertErrorLogSql = `
-          INSERT INTO audit_logs (natural_query, generated_sql, execution_time, status) 
-          VALUES ($1, $2, $3, $4)
+        const fullChatHistoryError = [
+          ...(history || []),
+          { role: 'user', content: question },
+          { role: 'assistant', content: error.message, is_error: true, status: status }
+        ];
+
+        const upsertErrorLogSql = `
+          INSERT INTO audit_logs (log_id, natural_query, execution_time, status, chat_history) 
+          VALUES ($1, $2, $3, $4, $5)
+          ON CONFLICT (log_id) DO UPDATE SET 
+            chat_history = EXCLUDED.chat_history,
+            status = EXCLUDED.status;
         `;
-        await this.dbService.executeCoreQuery(insertErrorLogSql, [
+        
+        await this.dbService.executeCoreQuery(upsertErrorLogSql, [
+          sessionId,
           question,
-          generatedSqlForLog || null, 
           executionTime,
-          status
+          status,
+          JSON.stringify(fullChatHistoryError)
         ]);
       } catch (logError: any) {}
 
-      if (status === 'BLOCKED_BY_AST') {
-        return { 
-          error: "Yêu cầu bị chặn do vi phạm quy định bảo vệ dữ liệu.", 
-          error_type: "SAFETY_VIOLATION" 
-        };
-      }
-      
-      if (errorMsg.includes('all_models_overloaded')) {
-        return { 
-          error: "Hệ thống AI hiện đang quá tải. Vui lòng thử lại sau.", 
-          error_type: "LIMIT_REACHED" 
-        };
-      }
-
-      return { 
-        error: error.message || "Lỗi hệ thống không xác định.", 
-        error_type: "UNKNOWN" 
-      };
+      if (status === 'BLOCKED_BY_AST') return { error: "Yêu cầu bị chặn do bảo vệ dữ liệu.", error_type: "SAFETY_VIOLATION" };
+      if (errorMsg.includes('all_models_overloaded')) return { error: "Hệ thống AI quá tải.", error_type: "LIMIT_REACHED" };
+      return { error: error.message || "Lỗi hệ thống.", error_type: "UNKNOWN" };
     }
   }
 }
