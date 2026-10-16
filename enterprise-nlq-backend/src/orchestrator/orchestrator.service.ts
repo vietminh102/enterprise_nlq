@@ -43,6 +43,16 @@ export class OrchestratorService {
       return { success: false, error: 'Không thể lấy danh sách' };
     }
   }
+  async deleteChatSession(sessionId: string) {
+    try {
+      const sql = `DELETE FROM audit_logs WHERE log_id = $1`;
+      await this.dbService.executeCoreQuery(sql, [sessionId]);
+      return { success: true, message: 'Đã xóa lịch sử chat' };
+    } catch (error: any) {
+      console.error('[Orchestrator] Lỗi khi xóa lịch sử:', error.message);
+      return { success: false, error: 'Không thể xóa lịch sử' };
+    }
+  }
 
   async processNaturalLanguageQuery(sessionId: string,question: string, history?: any[]) {
     const startTime = Date.now();
@@ -120,18 +130,28 @@ export class OrchestratorService {
       // ==========================================
 const executionTime = Date.now() - startTime;
       try {
+        // 1. LẤY LẠI LỊCH SỬ GỐC TỪ DB (Giữ lại toàn bộ data, biểu đồ của các lượt hỏi trước)
+        let existingChatHistory = [];
+        try {
+          const histRes = await this.dbService.executeCoreQuery('SELECT chat_history FROM audit_logs WHERE log_id = $1', [sessionId]);
+          if (histRes && histRes.length > 0 && histRes[0].chat_history) {
+             existingChatHistory = typeof histRes[0].chat_history === 'string' ? JSON.parse(histRes[0].chat_history) : histRes[0].chat_history;
+          }
+        } catch(e) {}
+
+        // 2. GỘP LỊCH SỬ GỐC VỚI TIN NHẮN MỚI NHẤT
         const fullChatHistory = [
-          ...(history || []),
+          ...existingChatHistory, // <-- Dùng lịch sử gốc thay vì dùng `...history` của Frontend
           { role: 'user', content: question },
           { 
             role: 'assistant', 
             content: insights || 'Đã truy xuất xong',
             chart_type: aiResultObj.chart_type,
-            generated_sql: safeSql
+            generated_sql: safeSql,
+            data: dbData ? dbData.slice(0, 100) : [] // Lưu 100 dòng để vẽ bảng, tránh làm nặng DB
           }
         ];
 
-        // Lệnh UPSERT ĐÃ ĐƯỢC LÀM SẠCH (Chỉ còn 5 cột)
         const upsertLogSql = `
           INSERT INTO audit_logs (log_id, natural_query, execution_time, status, chat_history) 
           VALUES ($1, $2, $3, $4, $5)
@@ -148,9 +168,9 @@ const executionTime = Date.now() - startTime;
           'SUCCESS',
           JSON.stringify(fullChatHistory)
         ]);
-        console.log(`[Audit] Đã lưu log thành công.`);
+        console.log(`[Audit] Đã cập nhật lịch sử an toàn.`);
       } catch (logError: any) {
-        console.error('[Audit] Cảnh báo: Lỗi khi lưu audit_log:', logError.message);
+        console.error('[Audit] Lỗi khi lưu:', logError.message);
       }
 
       return {
@@ -172,14 +192,21 @@ const executionTime = Date.now() - startTime;
         status = 'BLOCKED_BY_AST'; 
       }
 
-      // LƯU LỖI VÀO CHAT HISTORY (ĐÃ XÓA generated_sql KHỎI LỆNH)
-      try {
+try {
+        let mappedErrorType = 'UNKNOWN';
+        if (status === 'BLOCKED_BY_AST') mappedErrorType = 'SAFETY_VIOLATION';
+        else if (errorMsg.includes('all_models_overloaded')) mappedErrorType = 'LIMIT_REACHED';
+
         const fullChatHistoryError = [
           ...(history || []),
           { role: 'user', content: question },
-          { role: 'assistant', content: error.message, is_error: true, status: status }
+          { 
+            role: 'assistant', 
+            content: '', 
+            error: error.message, 
+            error_type: mappedErrorType 
+          }
         ];
-
         const upsertErrorLogSql = `
           INSERT INTO audit_logs (log_id, natural_query, execution_time, status, chat_history) 
           VALUES ($1, $2, $3, $4, $5)

@@ -1,4 +1,4 @@
-import { Controller, Post, Get, Param, Body, BadRequestException } from '@nestjs/common'; // <-- Đã thêm Get và Param ở đây
+import { Controller, Post, Get, Param, Body, BadRequestException,Delete } from '@nestjs/common'; // <-- Đã thêm Get và Param ở đây
 import { OrchestratorService } from './orchestrator.service';
 
 @Controller('api/query') 
@@ -28,5 +28,9 @@ export class OrchestratorController {
   @Get('history/:sessionId')
   async getHistory(@Param('sessionId') sessionId: string) {
     return await this.orchestratorService.getChatHistory(sessionId);
+  }
+  @Delete('history/:sessionId')
+  async deleteHistory(@Param('sessionId') sessionId: string) {
+    return await this.orchestratorService.deleteChatSession(sessionId);
   }
 }

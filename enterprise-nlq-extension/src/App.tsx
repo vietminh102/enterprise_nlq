@@ -2,7 +2,7 @@ import { useState, useRef, useEffect} from 'react';
 import axios from 'axios';
 import { 
   Send, Database, Loader2, 
-  LineChart as LineChartIcon, ShieldAlert, AlertTriangle, User, Bot, Plus, MessageSquare, Menu
+  LineChart as LineChartIcon, ShieldAlert, AlertTriangle, User, Bot, Plus, MessageSquare, Menu,Trash2
 } from 'lucide-react';
 import { 
   BarChart, Bar, 
@@ -86,8 +86,12 @@ export default function App() {
           id: `history-${index}`,
           role: msg.role,
           content: msg.content,
-          chart_type: msg.chart_type,
-          explanation: msg.explanation || msg.content 
+          chart_type: msg.chart_type,          // Lấy loại biểu đồ (bar, line, pie)
+          data: msg.data,                      // Lấy CÁC CON SỐ để vẽ biểu đồ
+          explanation: msg.content,
+          
+          error: msg.error,
+          error_type: msg.error_type
         }));
         setMessages(loadedMessages);
       }
@@ -136,17 +140,16 @@ export default function App() {
       const assistantMsg: ChatMessage = {
         id: (Date.now() + 1).toString(),
         role: 'assistant',
-        content: responseData.generated_sql || responseData.explanation || 'Đã truy xuất xong',
+        content: responseData.explanation || 'Đã truy xuất xong', 
         data: responseData.data,
         chart_type: responseData.chart_type,
         explanation: responseData.explanation,
         error: responseData.error,
         error_type: responseData.error_type
       };
-
       setMessages(prev => [...prev, assistantMsg]);
 
-      // NẾU LÀ CÂU HỎI ĐẦU TIÊN CỦA ĐOẠN CHAT MỚI -> TẢI LẠI SIDEBAR ĐỂ HIỆN TIÊU ĐỀ
+
 if (messages.length === 0) {
         setSessions(prev => [
           { session_id: currentSessionId, title: userMsg.content },
@@ -176,6 +179,28 @@ if (messages.length === 0) {
       setLoading(false);
     }
   };
+  // --- HÀM XÓA LỊCH SỬ CHAT ---
+  const handleDeleteSession = async (e: React.MouseEvent, id: string) => {
+    e.stopPropagation(); // Ngăn sự kiện click nhảy sang hàm loadChatHistory
+    const confirmDelete = window.confirm("Bạn có chắc chắn muốn xóa đoạn chat này không?");
+    if (!confirmDelete) return;
+
+    try {
+      const res = await axios.delete(`http://localhost:3000/api/query/history/${id}`);
+      if (res.data.success) {
+        // Xóa ngay lập tức khỏi Sidebar mà không cần load lại API
+        setSessions(prev => prev.filter(s => s.session_id !== id));
+        
+        // NẾU người dùng đang mở đúng cái đoạn chat vừa bị xóa -> Reset về màn hình trắng
+        if (sessionId === id) {
+          handleNewChat();
+        }
+      }
+    } catch (err) {
+      console.error("Lỗi khi xóa chat:", err);
+      alert("Không thể xóa đoạn chat. Vui lòng thử lại!");
+    }
+  };
 
   // --- HÀM RENDER BIỂU ĐỒ ---
   const renderChart = (msg: ChatMessage) => {
@@ -202,16 +227,18 @@ if (messages.length === 0) {
     const COLORS = ['#8B5CF6', '#3b82f6', '#10b981', '#f59e0b', '#ef4444'];
     const chartType = msg.chart_type?.toLowerCase();
 
-    if (chartType === 'bar') {
+if (chartType === 'bar') {
       return (
-        <div className="h-72 w-full mt-4">
-          <ResponsiveContainer width="100%" height="100%">
-            <BarChart data={chartData}>
+        <div className="w-full mt-4">
+          {/* TRICK 1: Dùng width="99%" thay vì 100%, và gán thẳng height={300} vào đây */}
+          <ResponsiveContainer width="99%" height={300}>
+            <BarChart data={chartData} margin={{ top: 10, right: 30, left: 0, bottom: 0 }}>
               <CartesianGrid strokeDasharray="3 3" vertical={false} />
               <XAxis dataKey={xAxisKey} tick={{ fontSize: 12 }} />
               <YAxis tick={{ fontSize: 12 }} />
               <Tooltip cursor={{ fill: '#f3f4f6' }} contentStyle={{ borderRadius: '8px' }} />
-              <Bar dataKey={yAxisKey} fill="#8B5CF6" radius={[4, 4, 0, 0]} />
+              {/* TRICK 2: Thêm isAnimationActive={false} để không bị lỗi khi render nhiều hình cùng lúc */}
+              <Bar dataKey={yAxisKey} fill="#8B5CF6" radius={[4, 4, 0, 0]} isAnimationActive={false} />
             </BarChart>
           </ResponsiveContainer>
         </div>
@@ -220,14 +247,14 @@ if (messages.length === 0) {
 
     if (chartType === 'line') {
       return (
-        <div className="h-72 w-full mt-4">
-          <ResponsiveContainer width="100%" height="100%">
-            <LineChart data={chartData}>
+        <div className="w-full mt-4">
+          <ResponsiveContainer width="99%" height={300}>
+            <LineChart data={chartData} margin={{ top: 10, right: 30, left: 0, bottom: 0 }}>
               <CartesianGrid strokeDasharray="3 3" vertical={false} />
               <XAxis dataKey={xAxisKey} tick={{ fontSize: 12 }} />
               <YAxis tick={{ fontSize: 12 }} />
               <Tooltip contentStyle={{ borderRadius: '8px' }} />
-              <Line type="monotone" dataKey={yAxisKey} stroke="#10b981" strokeWidth={3} dot={{ r: 4 }} activeDot={{ r: 6 }} />
+              <Line type="monotone" dataKey={yAxisKey} stroke="#10b981" strokeWidth={3} dot={{ r: 4 }} activeDot={{ r: 6 }} isAnimationActive={false} />
             </LineChart>
           </ResponsiveContainer>
         </div>
@@ -236,13 +263,14 @@ if (messages.length === 0) {
 
     if (chartType === 'pie') {
       return (
-        <div className="h-72 w-full mt-4">
-          <ResponsiveContainer width="100%" height="100%">
+        <div className="w-full mt-4">
+          <ResponsiveContainer width="99%" height={300}>
             <PieChart>
               <Pie
                 data={chartData} cx="50%" cy="50%" labelLine={true} outerRadius={90}
                 dataKey={yAxisKey} nameKey={xAxisKey}
                 label={({ name, percent }) => `${name || ''} ${((percent || 0) * 100).toFixed(0)}%`}
+                isAnimationActive={false}
               >
                 {chartData.map((_, index: number) => (
                   <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
@@ -254,8 +282,9 @@ if (messages.length === 0) {
         </div>
       );
     }
-    return null; 
+    return null;
   };
+
 
   return (
     <div className="flex h-screen bg-gray-50 font-sans overflow-hidden">
@@ -280,17 +309,29 @@ if (messages.length === 0) {
             <p className="text-sm text-gray-500 px-2 italic">Chưa có dữ liệu</p>
           )}
 
-          {sessions.map((session) => (
-            <button
+{sessions.map((session) => (
+            <div 
               key={session.session_id}
-              onClick={() => loadChatHistory(session.session_id)}
-              className={`w-full flex items-center gap-3 p-3 rounded-lg text-sm text-left truncate transition-colors ${
+              className={`group relative w-full flex items-center justify-between rounded-lg transition-colors cursor-pointer ${
                 sessionId === session.session_id ? 'bg-gray-800 text-white font-medium' : 'text-gray-400 hover:bg-gray-800 hover:text-gray-200'
               }`}
+              onClick={() => loadChatHistory(session.session_id)}
             >
-              <MessageSquare size={16} className="shrink-0" />
-              <span className="truncate">{session.title}</span>
-            </button>
+              {/* Nút hiển thị tiêu đề */}
+              <div className="flex-1 flex items-center gap-3 p-3 truncate">
+                <MessageSquare size={16} className="shrink-0" />
+                <span className="truncate">{session.title}</span>
+              </div>
+
+              {/* Nút Xóa (Mặc định ẩn, rê chuột vào mới hiện) */}
+              <button
+                onClick={(e) => handleDeleteSession(e, session.session_id)}
+                className="opacity-0 group-hover:opacity-100 p-2 mr-1 text-gray-500 hover:text-red-400 hover:bg-gray-700 rounded-md transition-all"
+                title="Xóa đoạn chat"
+              >
+                <Trash2 size={16} />
+              </button>
+            </div>
           ))}
         </div>
       </div>
