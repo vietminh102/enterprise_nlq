@@ -26,4 +26,9 @@ export class VectorSearchController {
       relevant_schemas: results
     };
   }
+
+  @Get('seed')
+  async seedData() {
+    return await this.vectorSearchService.seedAllSchemas();
+  }
 }

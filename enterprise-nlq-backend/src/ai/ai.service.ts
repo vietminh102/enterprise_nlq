@@ -1,13 +1,19 @@
 import { Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { GoogleGenerativeAI } from '@google/generative-ai';
+import { GoogleGenerativeAI, SchemaType, Schema} from '@google/generative-ai';
 
 @Injectable()
 export class AiService {
   private genAI: GoogleGenerativeAI;
-  private model: any;
+  private readonly fallbackModels = [
+    'gemini-3.5-flash-lite',
+    'gemini-3.5-flash',
+    'gemini-3.1-flash-lite',
+    'gemini-2.5-flash',
+    'gemini-2.5-flash-lite'
+  ];
 
-  constructor(private configService: ConfigService) {
+constructor(private configService: ConfigService) {
     const apiKey = this.configService.get<string>('GEMINI_API_KEY');
     if (!apiKey) {
       console.warn('⚠️ Cảnh báo: Chưa tìm thấy GEMINI_API_KEY trong file .env');
@@ -15,46 +21,118 @@ export class AiService {
     
     
     this.genAI = new GoogleGenerativeAI(apiKey || '');
-    
-    
-    this.model = this.genAI.getGenerativeModel({ 
-      model: 'gemini-3.5-flash',
-      generationConfig: {
-        responseMimeType: "application/json",
-      }
-    });
   }
 
-  async generateSql(userQuery: string, schemaMetadata: string): Promise<any> {
+  async generateSql(userQuery: string, schemaMetadata: string,glossaryContext: string = "",history: any[] = []): Promise<any> {
+    // 2. Format lại lịch sử chat thành dạng Text cho AI đọc
+    let historyPrompt = "";
+    if (history && history.length > 1) {
+      historyPrompt = "\n<CHAT_HISTORY>\nDưới đây là lịch sử các câu hỏi trước đó để bạn hiểu ngữ cảnh (Ví dụ: 'trong các sản phẩm trên' nghĩa là áp dụng thêm điều kiện (WHERE/AND) từ câu lệnh SQL của lượt trước):\n";
+      
+      // Bỏ câu hỏi cuối cùng vì nó chính là userQuery hiện tại
+      const previousHistory = history.slice(0, -1); 
+      previousHistory.forEach((msg, index) => {
+        historyPrompt += `Lượt ${index + 1} - ${msg.role === 'user' ? 'Người dùng hỏi' : 'Hệ thống trả lời'}: ${msg.content}\n`;
+      });
+      historyPrompt += "</CHAT_HISTORY>\n";
+    }
     const prompt = `
-Bạn là chuyên gia phân tích dữ liệu Enterprise PostgreSQL. 
-Hãy chuyển đổi câu hỏi của người dùng thành câu lệnh SQL dựa trên lược đồ cơ sở dữ liệu sau:
+Bạn là một chuyên gia phân tích dữ liệu và viết mã SQL xuất sắc.
+Nhiệm vụ của bạn là chuyển đổi câu hỏi bằng ngôn ngữ tự nhiên của người dùng thành câu lệnh SQL để truy vấn dữ liệu.
 
-Lược đồ (Schema):
+<SCHEMA>
 ${schemaMetadata}
+</SCHEMA>
 
-Câu hỏi của người dùng: "${userQuery}"
+<BUSINESS_GLOSSARY>
+Chú ý các định nghĩa nghiệp vụ nội bộ sau đây để áp dụng vào câu lệnh SQL:
+${glossaryContext}
+</BUSINESS_GLOSSARY>
+${historyPrompt}
 
-Quy tắc BẮT BUỘC:
-1. CHỈ sử dụng lệnh SELECT.
-2. KHÔNG sử dụng DROP, DELETE, UPDATE, INSERT, ALTER.
-3. Cấu trúc JSON trả về bắt buộc phải đúng định dạng sau:
-{
-  "sql_query": "câu lệnh SQL ở đây",
-  "chart_type": "pie | bar | line | table",
-  "explanation": "Giải thích ngắn gọn logic bạn dùng"
-}
+<USER_QUERY>
+${userQuery}
+</USER_QUERY>
+
+BẮT BUỘC TUÂN THỦ (NẾU SAI HỆ THỐNG SẼ SẬP):
+1. BƯỚC ĐỐI CHIẾU: Trước khi viết SELECT, bạn phải dò từng tên cột dự định viết xem có KHỚP CHÍNH XÁC TỪNG KÝ TỰ với danh sách cột trong phần <SCHEMA> không.
+2. CHỐNG ẢO GIÁC: Tuyệt đối không tự động nối tên bảng vào tên cột (Ví dụ: Nếu Schema chỉ ghi là 'name', phải dùng 'name', KHÔNG được tự ý viết thành 'product_name').
+3. Nếu câu hỏi có chứa từ khóa trong BUSINESS_GLOSSARY, hãy sử dụng chính xác logic SQL được cung cấp.
+4. Nếu câu hỏi yêu cầu lọc từ "các kết quả trên", hãy viết mệnh đề WHERE bao gồm cả điều kiện của câu hỏi trước đó để giữ đúng luồng phân tích.
 `;
 
-    try {
-      const result = await this.model.generateContent(prompt);
-      const responseText = result.response.text();
-      
-      // Chuyển chuỗi JSON text thành Object Javascript
-      return JSON.parse(responseText);
-    } catch (error: any) {
-      console.error('❌ Lỗi khi gọi Gemini API:', error.message);
-      throw new Error('Lỗi AI: ' + error.message);
+   
+    const responseSchema: Schema = {
+      type: SchemaType.OBJECT,
+      properties: {
+        sql_query: { type: SchemaType.STRING },
+        chart_type: { type: SchemaType.STRING, description: "bar, pie, line hoặc table" },
+      },
+      required: ["sql_query", "chart_type"],
+    };
+
+    for (const modelName of this.fallbackModels) {
+      try {
+        const currentModel = this.genAI.getGenerativeModel({ 
+          model: modelName, 
+          generationConfig: { responseMimeType: "application/json", responseSchema }
+        });
+        const result = await currentModel.generateContent(prompt);
+        return JSON.parse(result.response.text());
+      } catch (error: any) {
+        if (error.message?.toLowerCase().match(/(429|503|quota|limit|overloaded|high demand)/)) {
+          console.warn(`⏳ Model ${modelName} đang bận, thử model khác...`);
+          continue; 
+        }
+        throw new Error('Lỗi AI: ' + error.message);
+      }
     }
+    throw new Error('ALL_MODELS_OVERLOADED');
   }
-}
+
+  // AI ĐỌC DỮ LIỆU THẬT VÀ PHÂN TÍCH 
+  async generateDataInsights(userQuery: string, dbData: any[]): Promise<string> {
+    try {
+      const dataToAnalyze = dbData.length > 50 ? dbData.slice(0, 50) : dbData;
+
+      // 1. SỬA LỖI BIGINT: Ép kiểu BigInt về String an toàn trước khi nạp cho AI
+      const safeJsonString = JSON.stringify(dataToAnalyze, (key, value) =>
+        typeof value === 'bigint' ? value.toString() : value
+      );
+
+      const prompt = `
+Bạn là một Giám đốc Kinh doanh (Business Analyst).
+Câu hỏi của sếp: "${userQuery}"
+Dưới đây là BẢNG SỐ LIỆU THỰC TẾ vừa truy xuất được:
+${safeJsonString}
+
+Hãy viết một đoạn nhận xét về dữ liệu một cách nhìn tổng quát và phân tích thật hoàn hảo (Tổng quát và cụ thể không lan man 4 - 5 câu).
+YÊU CẦU:
+1. Phân tích trực tiếp vào các CON SỐ nổi bật.
+2. Đưa ra định hướng kinh doanh.
+3. TUYỆT ĐỐI KHÔNG giải thích biểu đồ hay code SQL.
+4. Hãy viết như một con người một cách tự nhiên nhất.
+`;
+
+      for (const modelName of this.fallbackModels) {
+        try {
+          console.log(`[AI Insights] Đang nhờ model ${modelName} viết nhận xét... (vui lòng đợi)`);
+          
+          const currentModel = this.genAI.getGenerativeModel({ model: modelName });
+          const result = await currentModel.generateContent(prompt);
+          const insightText = result.response.text();
+          
+          console.log(`[AI Insights] Hoàn thành phân tích!`);
+          return insightText;
+          
+        } catch (error: any) {
+          console.warn(`[AI Insights] Model ${modelName} thất bại:`, error.message);
+          if (error.message?.toLowerCase().match(/(429|503|quota|limit|overloaded)/)) continue;
+        }
+      }
+      return "Hệ thống AI hiện đang quá tải, không thể đưa ra nhận xét chiến lược lúc này.";
+    } catch (fatalError: any) {
+      console.error('[AI Insights] Lỗi nghiêm trọng khi dịch dữ liệu:', fatalError.message);
+      return "Không thể nhận xét do dữ liệu trả về chứa định dạng phức tạp.";
+    }
+}}
