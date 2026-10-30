@@ -6,13 +6,15 @@ import { VectorSearchModule } from '../vector-search/vector-search.module';
 import { AiModule } from '../ai/ai.module';
 import { GuardrailsModule } from '../guardrails/guardrails.module';
 import { DatabaseModule } from '../database/database.module';
+import { EmailServiceModule } from '../email-service/email-service.module';
 
 @Module({
   imports: [
     VectorSearchModule,
     AiModule,
     GuardrailsModule,
-    DatabaseModule
+    DatabaseModule,
+    EmailServiceModule
   ],
   controllers: [OrchestratorController],
   providers: [OrchestratorService],
