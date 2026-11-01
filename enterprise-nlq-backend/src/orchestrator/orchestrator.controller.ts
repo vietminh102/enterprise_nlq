@@ -1,9 +1,13 @@
 import { Controller, Post, Get, Param, Body, BadRequestException,Delete } from '@nestjs/common'; // <-- Đã thêm Get và Param ở đây
 import { OrchestratorService } from './orchestrator.service';
+import { EmailService } from '../email-service/email.service';
 
 @Controller('api/query') 
 export class OrchestratorController {
-  constructor(private readonly orchestratorService: OrchestratorService) {}
+  constructor(
+    private readonly orchestratorService: OrchestratorService,
+    private readonly emailService: EmailService,
+  ) {}
   
   @Post()
   async handleQuery(
@@ -15,7 +19,26 @@ export class OrchestratorController {
       throw new BadRequestException('Vui lòng cung cấp tham số "question" và "sessionId" trong body JSON.');
     }
     
-    return await this.orchestratorService.processNaturalLanguageQuery(sessionId, question, history);
+    const recipient = question.match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i)?.[0];
+    const emailIntent = /\b(gửi|send)\b[\s\S]*\b(mail|email)\b|\b(mail|email)\b[\s\S]*\b(gửi|send)\b/i.test(question);
+    const analysisQuestion = recipient
+      ? question.replace(recipient, '').replace(/\b(gửi|send|mail|email|cho|tới|đến|to)\b/gi, ' ').replace(/\s+/g, ' ').trim()
+      : question;
+    const result = await this.orchestratorService.processNaturalLanguageQuery(sessionId, analysisQuestion, history);
+    if (!emailIntent) return result;
+    if (!recipient) return { ...result, email_sent: false, email_error: 'Vui lòng cung cấp email nhận.' };
+    if (result.error || !result.data) return { ...result, email_sent: false, email_error: result.error ?? 'Không có dữ liệu để gửi.' };
+
+    try {
+      const email = await this.emailService.sendQueryResult({
+        recipient,
+        rows: result.data,
+        explanation: result.explanation,
+      });
+      return { ...result, email_sent: true, email };
+    } catch (error) {
+      return { ...result, email_sent: false, email_error: error instanceof Error ? error.message : 'Không thể gửi email.' };
+    }
   }
 
   // 1. API lấy danh sách các đoạn chat cho Sidebar
