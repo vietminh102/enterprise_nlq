@@ -11,7 +11,7 @@ import { VectorSearchModule } from './vector-search/vector-search.module';
 import { ReportGeneratorModule } from './report-generator/report-generator.module';
 import { CronSchedulerModule } from './cron-scheduler/cron-scheduler.module';
 import { ChatopsModule } from './chatops/chatops.module';
-import { EmailServiceModule } from './email-service/email-service.module';
+
 
 @Module({
   imports: [
@@ -26,7 +26,6 @@ import { EmailServiceModule } from './email-service/email-service.module';
     ReportGeneratorModule,
     CronSchedulerModule,
     ChatopsModule,
-    EmailServiceModule,
   ],
   controllers: [AppController],
   providers: [AppService],

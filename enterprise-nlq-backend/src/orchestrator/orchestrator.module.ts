@@ -6,7 +6,9 @@ import { VectorSearchModule } from '../vector-search/vector-search.module';
 import { AiModule } from '../ai/ai.module';
 import { GuardrailsModule } from '../guardrails/guardrails.module';
 import { DatabaseModule } from '../database/database.module';
-import { EmailServiceModule } from '../email-service/email-service.module';
+import { ChatopsModule } from '../chatops/chatops.module'; 
+import { ReportGeneratorModule } from '../report-generator/report-generator.module';
+
 
 @Module({
   imports: [
@@ -14,10 +16,11 @@ import { EmailServiceModule } from '../email-service/email-service.module';
     AiModule,
     GuardrailsModule,
     DatabaseModule,
-    EmailServiceModule
+    ChatopsModule,         
+    ReportGeneratorModule
   ],
   controllers: [OrchestratorController],
   providers: [OrchestratorService],
-  exports: [OrchestratorService] // Bắt buộc phải có dòng này để chia sẻ service
+  exports: [OrchestratorService] 
 })
 export class OrchestratorModule {}
