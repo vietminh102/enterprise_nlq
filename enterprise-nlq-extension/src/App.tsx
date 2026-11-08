@@ -2,7 +2,8 @@ import { useState, useRef, useEffect} from 'react';
 import axios from 'axios';
 import { 
   Send, Database, Loader2, 
-  LineChart as LineChartIcon, ShieldAlert, AlertTriangle, User, Bot, Plus, MessageSquare, Menu,Trash2
+  LineChart as LineChartIcon, ShieldAlert, AlertTriangle, User, Bot, Plus, MessageSquare, Menu, Trash2,
+  DatabaseZap, Copy, Check, Code2
 } from 'lucide-react';
 import { 
   BarChart, Bar, 
@@ -18,6 +19,7 @@ interface ChatMessage {
   content: string; 
   data?: Record<string, string | number>[];
   chart_type?: string;
+  generated_sql?: string; // Nhận mã truy vấn (MongoDB, SQL...)
   explanation?: string;
   error?: string;
   error_type?: string; 
@@ -33,6 +35,10 @@ export default function App() {
   const [inputValue, setInputValue] = useState('');
   const [loading, setLoading] = useState(false);
   
+  // STATE LƯU LOẠI DATABASE VÀ TRẠNG THÁI COPY
+  const [dbType, setDbType] = useState('PostgreSQL'); 
+  const [copiedId, setCopiedId] = useState<string | null>(null);
+
   // Các state quản lý Sidebar
   const [sessions, setSessions] = useState<ChatSession[]>([]);
   const [isSidebarOpen, setIsSidebarOpen] = useState(true);
@@ -47,15 +53,19 @@ export default function App() {
     scrollToBottom();
   }, [messages]);
 
+  const handleCopyCode = (id: string, code: string) => {
+    navigator.clipboard.writeText(code);
+    setCopiedId(id);
+    setTimeout(() => setCopiedId(null), 2000);
+  };
 
-// --- 1. TẢI DANH SÁCH SIDEBAR KHI MỞ TRANG ---
+  // --- 1. TẢI DANH SÁCH SIDEBAR KHI MỞ TRANG ---
   useEffect(() => {
-    let isMounted = true; // Cờ theo dõi trạng thái Component
+    let isMounted = true; 
 
     const loadSessionsOnMount = async () => {
       try {
         const res = await axios.get('http://localhost:3000/api/query/sessions');
-        // React sẽ hiểu đây là state update bất đồng bộ (sau khi await) -> Sẽ không báo lỗi
         if (res.data.success && isMounted) {
           setSessions(res.data.sessions);
         }
@@ -66,30 +76,29 @@ export default function App() {
 
     loadSessionsOnMount();
 
-    // Hàm cleanup (Dọn dẹp khi tắt trang để chống rò rỉ bộ nhớ)
     return () => {
       isMounted = false;
     };
   }, []);
 
   // --- 2. TẢI LỊCH SỬ CHAT KHI CLICK VÀO SIDEBAR ---
-  const loadChatHistory = async (id: string) => {
+const loadChatHistory = async (id: string) => {
     setSessionId(id);
-    setMessages([]); // Xóa màn hình tạm thời lúc đợi data
+    setMessages([]); 
     setLoading(true);
     
     try {
       const res = await axios.get(`http://localhost:3000/api/query/history/${id}`);
       if (res.data.success && res.data.history) {
-        // Map dữ liệu từ Database lên giao diện
-          const loadedMessages: ChatMessage[] = res.data.history.map((msg: Omit<ChatMessage, 'id'>, index: number) => ({
+        // Thay "msg: any" thành "msg: Omit<ChatMessage, 'id'>"
+        const loadedMessages: ChatMessage[] = res.data.history.map((msg: Omit<ChatMessage, 'id'>, index: number) => ({
           id: `history-${index}`,
           role: msg.role,
           content: msg.content,
-          chart_type: msg.chart_type,          // Lấy loại biểu đồ (bar, line, pie)
-          data: msg.data,                      // Lấy CÁC CON SỐ để vẽ biểu đồ
+          chart_type: msg.chart_type,          
+          data: msg.data,                      
+          generated_sql: msg.generated_sql,
           explanation: msg.content,
-          
           error: msg.error,
           error_type: msg.error_type
         }));
@@ -102,19 +111,17 @@ export default function App() {
     }
   };
 
-
   // --- 3. TẠO ĐOẠN CHAT MỚI ---
   const handleNewChat = () => {
-    setSessionId(null); // Trả ID về null để lần gửi tới sẽ tự sinh ID mới
+    setSessionId(null); 
     setMessages([]); 
-    if (window.innerWidth < 768) setIsSidebarOpen(false); // Đóng sidebar trên mobile
+    if (window.innerWidth < 768) setIsSidebarOpen(false); 
   };
 
   // --- 4. HÀM XỬ LÝ GỬI TIN NHẮN ---
   const handleQuery = async () => {
     if (!inputValue.trim()) return;
     
-    // Nếu là đoạn chat mới toanh, tự sinh ID. Nếu đang ở đoạn chat cũ, dùng ID cũ.
     const currentSessionId = sessionId || crypto.randomUUID();
     if (!sessionId) setSessionId(currentSessionId);
 
@@ -133,7 +140,8 @@ export default function App() {
       const res = await axios.post('http://localhost:3000/api/query', {
         sessionId: currentSessionId,
         question: userMsg.content,
-        history: messages.map(msg => ({ role: msg.role, content: msg.content })) 
+        history: messages.map(msg => ({ role: msg.role, content: msg.content })),
+        dbType: dbType
       });
       
       const responseData = res.data;
@@ -143,14 +151,14 @@ export default function App() {
         content: responseData.explanation || 'Đã truy xuất xong', 
         data: responseData.data,
         chart_type: responseData.chart_type,
+        generated_sql: responseData.generated_sql,
         explanation: responseData.explanation,
         error: responseData.error,
         error_type: responseData.error_type
       };
       setMessages(prev => [...prev, assistantMsg]);
 
-
-if (messages.length === 0) {
+      if (messages.length === 0) {
         setSessions(prev => [
           { session_id: currentSessionId, title: userMsg.content },
           ...prev
@@ -179,19 +187,17 @@ if (messages.length === 0) {
       setLoading(false);
     }
   };
+
   // --- HÀM XÓA LỊCH SỬ CHAT ---
   const handleDeleteSession = async (e: React.MouseEvent, id: string) => {
-    e.stopPropagation(); // Ngăn sự kiện click nhảy sang hàm loadChatHistory
+    e.stopPropagation(); 
     const confirmDelete = window.confirm("Bạn có chắc chắn muốn xóa đoạn chat này không?");
     if (!confirmDelete) return;
 
     try {
       const res = await axios.delete(`http://localhost:3000/api/query/history/${id}`);
       if (res.data.success) {
-        // Xóa ngay lập tức khỏi Sidebar mà không cần load lại API
         setSessions(prev => prev.filter(s => s.session_id !== id));
-        
-        // NẾU người dùng đang mở đúng cái đoạn chat vừa bị xóa -> Reset về màn hình trắng
         if (sessionId === id) {
           handleNewChat();
         }
@@ -227,17 +233,15 @@ if (messages.length === 0) {
     const COLORS = ['#8B5CF6', '#3b82f6', '#10b981', '#f59e0b', '#ef4444'];
     const chartType = msg.chart_type?.toLowerCase();
 
-if (chartType === 'bar') {
+    if (chartType === 'bar') {
       return (
         <div className="w-full mt-4">
-          {/* TRICK 1: Dùng width="99%" thay vì 100%, và gán thẳng height={300} vào đây */}
           <ResponsiveContainer width="99%" height={300}>
             <BarChart data={chartData} margin={{ top: 10, right: 30, left: 0, bottom: 0 }}>
               <CartesianGrid strokeDasharray="3 3" vertical={false} />
               <XAxis dataKey={xAxisKey} tick={{ fontSize: 12 }} />
               <YAxis tick={{ fontSize: 12 }} />
               <Tooltip cursor={{ fill: '#f3f4f6' }} contentStyle={{ borderRadius: '8px' }} />
-              {/* TRICK 2: Thêm isAnimationActive={false} để không bị lỗi khi render nhiều hình cùng lúc */}
               <Bar dataKey={yAxisKey} fill="#8B5CF6" radius={[4, 4, 0, 0]} isAnimationActive={false} />
             </BarChart>
           </ResponsiveContainer>
@@ -285,13 +289,11 @@ if (chartType === 'bar') {
     return null;
   };
 
-
   return (
     <div className="flex h-screen bg-gray-50 font-sans overflow-hidden">
       
       {/* ===================== SIDEBAR (Cột trái) ===================== */}
       <div className={`${isSidebarOpen ? 'w-64' : 'w-0'} bg-gray-900 text-white transition-all duration-300 flex flex-col shrink-0 overflow-hidden`}>
-        {/* Nút Tạo Chat Mới */}
         <div className="p-3">
           <button 
             onClick={handleNewChat}
@@ -301,7 +303,6 @@ if (chartType === 'bar') {
           </button>
         </div>
 
-        {/* Danh sách Lịch sử */}
         <div className="flex-1 overflow-y-auto p-3 space-y-1">
           <p className="text-xs text-gray-500 font-semibold mb-2 px-2 uppercase tracking-wider">Gần đây</p>
           
@@ -309,7 +310,7 @@ if (chartType === 'bar') {
             <p className="text-sm text-gray-500 px-2 italic">Chưa có dữ liệu</p>
           )}
 
-{sessions.map((session) => (
+          {sessions.map((session) => (
             <div 
               key={session.session_id}
               className={`group relative w-full flex items-center justify-between rounded-lg transition-colors cursor-pointer ${
@@ -317,13 +318,11 @@ if (chartType === 'bar') {
               }`}
               onClick={() => loadChatHistory(session.session_id)}
             >
-              {/* Nút hiển thị tiêu đề */}
               <div className="flex-1 flex items-center gap-3 p-3 truncate">
                 <MessageSquare size={16} className="shrink-0" />
                 <span className="truncate">{session.title}</span>
               </div>
 
-              {/* Nút Xóa (Mặc định ẩn, rê chuột vào mới hiện) */}
               <button
                 onClick={(e) => handleDeleteSession(e, session.session_id)}
                 className="opacity-0 group-hover:opacity-100 p-2 mr-1 text-gray-500 hover:text-red-400 hover:bg-gray-700 rounded-md transition-all"
@@ -339,7 +338,6 @@ if (chartType === 'bar') {
       {/* ===================== KHU VỰC CHAT CHÍNH (Cột phải) ===================== */}
       <div className="flex-1 flex flex-col min-w-0 bg-white">
         
-        {/* Header (Có nút bấm mở/đóng Sidebar) */}
         <header className="bg-white border-b border-gray-200 p-4 flex items-center gap-3 shadow-sm z-10">
           <button 
             onClick={() => setIsSidebarOpen(!isSidebarOpen)} 
@@ -353,7 +351,6 @@ if (chartType === 'bar') {
           </div>
         </header>
 
-        {/* Danh sách tin nhắn Chat */}
         <div className="flex-1 overflow-y-auto p-4 md:p-6 space-y-6 bg-gray-50">
           
           {messages.length === 0 && (
@@ -366,7 +363,6 @@ if (chartType === 'bar') {
           {messages.map((msg) => (
             <div key={msg.id} className={`flex flex-col ${msg.role === 'user' ? 'items-end' : 'items-start'}`}>
               
-              {/* Tin nhắn USER */}
               {msg.role === 'user' && (
                 <div className="flex gap-2 max-w-[85%] md:max-w-[70%]">
                   <div className="bg-purple-100 text-purple-900 px-4 py-2.5 rounded-2xl rounded-tr-sm shadow-sm">
@@ -378,7 +374,6 @@ if (chartType === 'bar') {
                 </div>
               )}
 
-              {/* Tin nhắn ASSISTANT */}
               {msg.role === 'assistant' && (
                 <div className="flex gap-3 w-full max-w-4xl">
                   <div className="w-8 h-8 rounded-full bg-blue-100 flex items-center justify-center shrink-0 mt-1">
@@ -412,6 +407,37 @@ if (chartType === 'bar') {
                           </div>
                         )}
 
+                        {/* HIỂN THỊ MÃ TRUY VẤN (MONGODB, SQL, ORACLE...) */}
+                        {msg.generated_sql && (
+                          <div className="mb-4 rounded-lg bg-gray-900 text-gray-200 overflow-hidden text-xs">
+                            <div className="flex items-center justify-between px-3 py-2 bg-gray-800 text-gray-400 border-b border-gray-700">
+                              <span className="font-mono flex items-center gap-1.5 font-medium text-gray-300">
+                                <Code2 size={14} className="text-purple-400" /> Mã truy vấn
+                              </span>
+                              <button
+                                onClick={() => handleCopyCode(msg.id, msg.generated_sql || '')}
+                                className="flex items-center gap-1.5 px-2 py-1 rounded bg-gray-700 hover:bg-gray-600 text-gray-200 transition-colors"
+                              >
+                                {copiedId === msg.id ? (
+                                  <>
+                                    <Check size={13} className="text-green-400" />
+                                    <span className="text-green-400 font-medium">Đã chép</span>
+                                  </>
+                                ) : (
+                                  <>
+                                    <Copy size={13} />
+                                    <span>Sao chép</span>
+                                  </>
+                                )}
+                              </button>
+                            </div>
+                            <pre className="p-3.5 font-mono overflow-x-auto whitespace-pre-wrap text-emerald-400 leading-relaxed">
+                              {msg.generated_sql}
+                            </pre>
+                          </div>
+                        )}
+
+                        {/* BẢNG DỮ LIỆU THỰC TẾ */}
                         {msg.data && msg.data.length > 0 && (
                           <div className="overflow-x-auto rounded-lg border border-gray-100">
                             <table className="w-full text-left text-sm text-gray-600">
@@ -435,7 +461,8 @@ if (chartType === 'bar') {
                           </div>
                         )}
 
-                        {msg.chart_type && msg.chart_type !== 'table' && (
+                        {/* CHỈ HIỂN THỊ TRỰC QUAN HÓA KHI CÓ DỮ LIỆU ĐỂ VẼ */}
+                        {msg.data && msg.data.length > 0 && msg.chart_type && msg.chart_type !== 'table' && (
                           <div className="mt-6 border-t pt-4">
                             <h2 className="text-gray-700 font-medium flex items-center gap-2 mb-2">
                               <LineChartIcon size={16} className="text-green-600" /> Trực quan hóa
@@ -464,9 +491,28 @@ if (chartType === 'bar') {
           <div ref={messagesEndRef} />
         </div>
 
-        {/* Khung Input (Giữ nguyên) */}
-        <div className="p-4 bg-white border-t z-10">
-          <div className="relative flex items-center max-w-4xl mx-auto rounded-full bg-gray-50 border border-gray-300 focus-within:ring-2 ring-purple-400 focus-within:bg-white transition-all overflow-hidden p-1">
+        {/* Khung Input */}
+        <div className="p-4 bg-white border-t z-10 flex items-center gap-2">
+          
+          {/* NÚT CHỌN LOẠI CSDL */}
+          <div className="relative group shrink-0">
+            <div className="flex items-center gap-1 bg-gray-100 border border-gray-300 rounded-full pl-3 pr-2 py-2 text-sm text-gray-700 hover:bg-gray-200 cursor-pointer">
+              <DatabaseZap size={16} className="text-purple-600" />
+              <select 
+                value={dbType} 
+                onChange={(e) => setDbType(e.target.value)}
+                className="bg-transparent appearance-none outline-none font-medium cursor-pointer pr-4"
+              >
+                <option value="PostgreSQL">PostgreSQL</option>
+                <option value="MongoDB">MongoDB</option>
+                <option value="Oracle">Oracle SQL</option>
+                <option value="MySQL">MySQL</option>
+                <option value="SQL Server">SQL Server</option>
+              </select>
+            </div>
+          </div>
+
+          <div className="relative flex-1 flex items-center max-w-4xl rounded-full bg-gray-50 border border-gray-300 focus-within:ring-2 ring-purple-400 focus-within:bg-white transition-all overflow-hidden p-1">
             <input
               type="text"
               className="w-full pl-4 pr-12 py-2.5 bg-transparent text-sm outline-none text-gray-800"

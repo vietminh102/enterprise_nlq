@@ -15,36 +15,36 @@ export class OrchestratorController {
   async handleQuery(
     @Body('sessionId') sessionId: string,
     @Body('question') question: string,
-    @Body('history') history?: any[]
+    @Body('history') history?: any[],
+    @Body('dbType') dbType?: string // BƯỚC 1: LẤY dbType TỪ FRONTEND
   ) {
     if (!question || !sessionId) {
       throw new BadRequestException('Vui lòng cung cấp tham số "question" và "sessionId" trong body JSON.');
     }
     
-    // 1. PHÂN TÍCH Ý ĐỊNH GỬI EMAIL (Regex cũ của bạn)
+    // 1. PHÂN TÍCH Ý ĐỊNH GỬI EMAIL
     const recipient = question.match(/[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/i)?.[0];
     const emailIntent = /\b(gửi|send)\b[\s\S]*\b(mail|email)\b|\b(mail|email)\b[\s\S]*\b(gửi|send)\b/i.test(question);
     
-    // 2. LÀM SẠCH CÂU HỎI ĐỂ AI KHÔNG BỊ NHIỄU
+    // 2. LÀM SẠCH CÂU HỎI
     const analysisQuestion = recipient
       ? question.replace(recipient, '').replace(/\b(gửi|send|mail|email|cho|tới|đến|to)\b/gi, ' ').replace(/\s+/g, ' ').trim()
       : question;
       
-    // 3. TRUY VẤN DỮ LIỆU BÌNH THƯỜNG
-    const result = await this.orchestratorService.processNaturalLanguageQuery(sessionId, analysisQuestion, history);
+    // 3. TRUY VẤN DỮ LIỆU (BƯỚC 2: TRUYỀN dbType XUỐNG SERVICE)
+    const result = await this.orchestratorService.processNaturalLanguageQuery(sessionId, analysisQuestion, history, dbType);
     
     // Nếu không có ý định gửi email, trả kết quả về luôn cho UI
     if (!emailIntent) return result;
     
-    // 4. KIỂM TRA ĐIỀU KIỆN TRƯỚC KHI GỬI
+    // 4. KIỂM TRA ĐIỀU KIỆN TRƯỚC KHI GỬI (Giữ nguyên)
     if (!recipient) return { ...result, email_sent: false, email_error: 'Vui lòng cung cấp email nhận cụ thể.' };
     if (result.error || !result.data || result.data.length === 0) {
       return { ...result, email_sent: false, email_error: result.error ?? 'Không có dữ liệu để gửi.' };
     }
 
-    // 5. TIẾN HÀNH TẠO EXCEL VÀ GỬI QUA CHATOPS
+    // 5. TIẾN HÀNH TẠO EXCEL VÀ GỬI QUA CHATOPS (Giữ nguyên)
     try {
-      // Dùng service để tạo file Excel đẹp (Tái sử dụng code)
       const excelBuffer = await this.reportGeneratorService.generateMultiSheetExcelReport({ 
         'Dữ Liệu Truy Vấn': result.data 
       });
@@ -54,20 +54,8 @@ export class OrchestratorController {
         buffer: excelBuffer
       };
 
-      // Định dạng nội dung email (lấy luôn giải thích của AI)
-      const emailContent = `Kính gửi,
+      const emailContent = `Kính gửi,\n\nĐây là kết quả báo cáo cho yêu cầu: "${analysisQuestion}"\n\n🧠 **AI Phân Tích & Nhận Xét:**\n${result.explanation || 'Đã truy xuất xong dữ liệu.'}\n\nChi tiết dữ liệu vui lòng xem trong file Excel đính kèm.\n\nTrân trọng,\nHệ thống Enterprise NLQ Assistant.`;
 
-Đây là kết quả báo cáo cho yêu cầu: "${analysisQuestion}"
-
-🧠 **AI Phân Tích & Nhận Xét:**
-${result.explanation || 'Đã truy xuất xong dữ liệu.'}
-
-Chi tiết dữ liệu vui lòng xem trong file Excel đính kèm.
-
-Trân trọng,
-Hệ thống Enterprise NLQ Assistant.`;
-
-      // Gọi ChatOps phát mail đi
       const success = await this.chatopsService.sendNotification('email', recipient, emailContent, attachment);
       
       if (success) {

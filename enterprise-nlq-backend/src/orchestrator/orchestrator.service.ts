@@ -54,13 +54,12 @@ export class OrchestratorService {
     }
   }
 
-  async processNaturalLanguageQuery(sessionId: string,question: string, history?: any[]) {
+async processNaturalLanguageQuery(sessionId: string, question: string, history?: any[], dbType: string = 'PostgreSQL') {
     const startTime = Date.now();
     let generatedSqlForLog = ''; 
 
     try {
-      console.log(`[Orchestrator] Nhận câu hỏi: "${question}"`);
-
+      console.log(`[Orchestrator] Nhận câu hỏi: "${question}" (Target DB: ${dbType})`);
 
       // Bước 1: RAG - Tìm Schema liên quan
       const schemas = await this.vectorSearchService.findRelevantSchemas(question);
@@ -70,10 +69,10 @@ export class OrchestratorService {
         console.warn(`[Orchestrator] ⚠️ CẢNH BÁO: Không tìm thấy Schema nào trong Vector DB.`);
       }
 
-      const schemaContext = schemas.map((item: any) => {
+      const schemaContext = schemas?.map((item: any) => {
         if (typeof item === 'string') return item;
         return item.description || item.schema_info || item.content || JSON.stringify(item); 
-      }).join('\n');
+      }).join('\n') || '';
 
       console.log(`[Orchestrator] Đã tổng hợp Schema dài ${schemaContext.length} ký tự.`);
 
@@ -93,8 +92,8 @@ export class OrchestratorService {
       }
 
 
-      // Bước 2: AI Text-to-SQL
-      const aiResponse = await this.aiService.generateSql(question, schemaContext,glossaryContext,history);
+      // Bước 2: AI Text-to-SQL (TRUYỀN THÊM dbType VÀO ĐÂY)
+      const aiResponse = await this.aiService.generateSql(question, schemaContext, glossaryContext, history, dbType);
       
       let aiResultObj;
       try {
@@ -107,30 +106,43 @@ export class OrchestratorService {
         throw new Error('AI không trả về đúng định dạng JSON.');
       }
 
-      const rawSql = aiResultObj.sql_query;
-      console.log(`[Orchestrator] AI sinh ra SQL: ${rawSql}`);
+      // Xử lý linh hoạt thuộc tính trả về từ AI (có thể là sql_query hoặc query_code)
+      const rawSql = aiResultObj.sql_query || aiResultObj.query_code || aiResultObj.query;
+      console.log(`[Orchestrator] AI sinh ra Truy vấn (${dbType}): ${rawSql}`);
 
-      // Bước 3: Guardrails
-      const safeSql = this.guardrailsService.validateAndSanitize(rawSql);
+      // Bước 3: Guardrails (Chỉ áp dụng AST Guardrails nếu là PostgreSQL)
+      let safeSql = rawSql;
+      const isPostgres = dbType.toLowerCase() === 'postgresql' || dbType.toLowerCase() === 'sql';
+      
+      if (isPostgres) {
+         safeSql = this.guardrailsService.validateAndSanitize(rawSql);
+         console.log(`[Orchestrator] SQL an toàn: ${safeSql}`);
+      }
       generatedSqlForLog = safeSql; 
-      console.log(`[Orchestrator] SQL an toàn: ${safeSql}`);
 
-      // Bước 4: Database (Chạy trên BIZ DB)
-      const dbData = await this.dbService.executeBizQuery(safeSql);
-      console.log(`[Orchestrator] Đã lấy được ${dbData.length} dòng dữ liệu.`);
-
+      // Bước 4: Thực thi truy vấn tùy theo loại CSDL
+      let dbData: any[] = [];
       let insights = "";
-      if (dbData && dbData.length > 0) {
-        console.log(`[Orchestrator] Đang nhờ AI phân tích số liệu thực tế...`);
-        insights = await this.aiService.generateDataInsights(question, dbData);
+
+      if (isPostgres) {
+        // Chạy thẳng vào DB doanh nghiệp nếu là PostgreSQL
+        dbData = await this.dbService.executeBizQuery(safeSql);
+        console.log(`[Orchestrator] Đã lấy được ${dbData.length} dòng dữ liệu.`);
+
+        if (dbData && dbData.length > 0) {
+          console.log(`[Orchestrator] Đang nhờ AI phân tích số liệu thực tế...`);
+          insights = await this.aiService.generateDataInsights(question, dbData);
+        }
+      } else {
+         // Nếu là MongoDB, Oracle, v.v., hệ thống chỉ đóng vai trò "Trợ lý viết code"
+         insights = `Dưới đây là mã truy vấn dành cho hệ quản trị **${dbType}**. Hệ thống hiện tại chỉ được cấu hình kết nối trực tiếp với PostgreSQL, bạn có thể copy đoạn mã này để tự thực thi trên CSDL của mình.`;
       }
 
       // ==========================================
-      // BƯỚC 5: LƯU AUDIT LOG KÈM THEO CHART VÀ EXPLANATION
+      // BƯỚC 5: LƯU AUDIT LOG
       // ==========================================
-const executionTime = Date.now() - startTime;
+      const executionTime = Date.now() - startTime;
       try {
-        // 1. LẤY LẠI LỊCH SỬ GỐC TỪ DB (Giữ lại toàn bộ data, biểu đồ của các lượt hỏi trước)
         let existingChatHistory = [];
         try {
           const histRes = await this.dbService.executeCoreQuery('SELECT chat_history FROM audit_logs WHERE log_id = $1', [sessionId]);
@@ -139,16 +151,15 @@ const executionTime = Date.now() - startTime;
           }
         } catch(e) {}
 
-        // 2. GỘP LỊCH SỬ GỐC VỚI TIN NHẮN MỚI NHẤT
         const fullChatHistory = [
-          ...existingChatHistory, // <-- Dùng lịch sử gốc thay vì dùng `...history` của Frontend
+          ...existingChatHistory,
           { role: 'user', content: question },
           { 
             role: 'assistant', 
             content: insights || 'Đã truy xuất xong',
             chart_type: aiResultObj.chart_type,
             generated_sql: safeSql,
-            data: dbData ? dbData.slice(0, 100) : [] // Lưu 100 dòng để vẽ bảng, tránh làm nặng DB
+            data: dbData ? dbData.slice(0, 100) : [] // Lưu 100 dòng để vẽ bảng, nếu mảng rỗng thì Frontend không hiện bảng
           }
         ];
 
@@ -184,6 +195,7 @@ const executionTime = Date.now() - startTime;
       };
 
     } catch (error: any) {
+      // (Phần xử lý lỗi bên dưới giữ nguyên)
       const errorMsg = error.message?.toLowerCase() || '';
       const executionTime = Date.now() - startTime;
       let status = 'DB_ERROR'; 
@@ -192,7 +204,7 @@ const executionTime = Date.now() - startTime;
         status = 'BLOCKED_BY_AST'; 
       }
 
-try {
+      try {
         let mappedErrorType = 'UNKNOWN';
         if (status === 'BLOCKED_BY_AST') mappedErrorType = 'SAFETY_VIOLATION';
         else if (errorMsg.includes('all_models_overloaded')) mappedErrorType = 'LIMIT_REACHED';
