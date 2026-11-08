@@ -10,29 +10,29 @@ export class ChatopsService implements OnModuleInit {
   constructor(private readonly config: ConfigService) {}
 
   onModuleInit() {
-    const host = this.config.get<string>('SMTP_HOST') ?? 'smtp-relay.brevo.com'; 
-    const user = this.config.get<string>('SMTP_USER') ?? this.config.get<string>('EMAIL_USER');
-    const pass = this.config.get<string>('SMTP_PASS') ?? this.config.get<string>('EMAIL_PASS');
+    const host = 'smtp-relay.brevo.com'; 
+    const port = this.config.get<number>('SMTP_PORT') ?? 587;
+    const user = this.config.get<string>('SMTP_USER');
+    const pass = this.config.get<string>('SMTP_PASS');
     
-    if (!host || !user || !pass) {
-      this.logger.warn('SMTP (Brevo/Gmail) chưa cấu hình đầy đủ trong file .env. Tính năng Email có thể bị lỗi.');
+    if (!user || !pass) {
+      this.logger.warn('❌ Chưa cấu hình SMTP_USER và SMTP_PASS cho Brevo. Tính năng Email bị vô hiệu hóa.');
       return;
     }
     
-    // CẤU HÌNH NODEMAILER TỐI ƯU CHO BREVO 
+    
     this.transporter = nodemailer.createTransport({
       host,
-      port: this.config.get<number>('SMTP_PORT') ?? 587,
-      secure: false, 
+      port,
+      secure: port === 465, 
       auth: { user, pass },
-      connectionTimeout: 10000, 
-      greetingTimeout: 5000,
+      connectionTimeout: 15000, 
+      greetingTimeout: 10000,
     });
 
-    this.logger.log('Đã khởi tạo dịch vụ gửi Email (SMTP).');
+    this.logger.log(`✅ Đã khởi tạo dịch vụ gửi Email qua Brevo (Port: ${port}).`);
   }
 
-  // HÀM ĐIỀU PHỐI ĐA KÊNH
   async sendNotification(
     channel: 'email' | 'zalo' | 'slack', 
     recipient: string, 
@@ -46,12 +46,6 @@ export class ChatopsService implements OnModuleInit {
         case 'email':
           await this.sendEmail(recipient, content, attachment);
           break;
-        case 'zalo':
-          // await this.sendZalo(recipient, content);
-          break;
-        case 'slack':
-          // await this.sendSlack(recipient, content);
-          break;
         default:
           throw new Error('Kênh thông báo không được hỗ trợ.');
       }
@@ -64,9 +58,8 @@ export class ChatopsService implements OnModuleInit {
     }
   }
 
-  // HÀM GỬI EMAIL CHUYÊN SÂU
   private async sendEmail(recipientEmail: string, content: string, attachment?: { filename: string, buffer: Buffer }) {
-    if (!this.transporter) throw new BadRequestException('SMTP chưa được cấu hình trong backend .env.');
+    if (!this.transporter) throw new BadRequestException('SMTP Brevo chưa được cấu hình.');
     if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(recipientEmail)) {
       throw new BadRequestException('Địa chỉ email nhận không hợp lệ.');
     }
@@ -78,7 +71,6 @@ export class ChatopsService implements OnModuleInit {
       html: `<div style="font-family: Arial, sans-serif; line-height: 1.6;">${content.replace(/\n/g, '<br/>')}</div>`,
     };
 
-    // Chèn file Excel (hoặc CSV) đính kèm nếu có
     if (attachment) {
       mailOptions.attachments = [
         {
@@ -93,11 +85,11 @@ export class ChatopsService implements OnModuleInit {
     return info;
   }
 
-  // LẤY ĐỊA CHỈ NGƯỜI GỬI
   private getFromAddress() {
     const configured = this.config.get<string>('SMTP_FROM')?.trim();
     if (configured) return configured;
     
-    return '"Enterprise AI Assistant" <no-reply@enterprise.com>';
+    const defaultUser = this.config.get<string>('SMTP_USER');
+    return `"Enterprise AI Assistant" <${defaultUser}>`;
   }
 }
