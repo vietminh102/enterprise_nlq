@@ -1,36 +1,23 @@
 import { BadRequestException, Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import * as nodemailer from 'nodemailer';
 
 @Injectable()
 export class ChatopsService implements OnModuleInit {
   private readonly logger = new Logger(ChatopsService.name);
-  private transporter?: nodemailer.Transporter;
+  private apiKey: string;
+  private senderEmail: string;
 
   constructor(private readonly config: ConfigService) {}
 
   onModuleInit() {
-    const host = 'smtp-relay.brevo.com'; 
-    const port = this.config.get<number>('SMTP_PORT') ?? 587;
-    const user = this.config.get<string>('SMTP_USER');
-    const pass = this.config.get<string>('SMTP_PASS');
+    const apiKey: string = this.config.get<string>('BREVO_API_KEY')!;
+    this.senderEmail = this.config.get<string>('SMTP_FROM') || 'thongbaolovee@gmail.com';
     
-    if (!user || !pass) {
-      this.logger.warn('❌ Chưa cấu hình SMTP_USER và SMTP_PASS cho Brevo. Tính năng Email bị vô hiệu hóa.');
-      return;
+    if (!this.apiKey) {
+      this.logger.warn('❌ Chưa cấu hình BREVO_API_KEY. Tính năng Email API bị vô hiệu hóa.');
+    } else {
+      this.logger.log('✅ Đã khởi tạo dịch vụ gửi Email qua API Brevo (Port 443).');
     }
-    
-    
-    this.transporter = nodemailer.createTransport({
-      host,
-      port,
-      secure: port === 465, 
-      auth: { user, pass },
-      connectionTimeout: 15000, 
-      greetingTimeout: 10000,
-    });
-
-    this.logger.log(`✅ Đã khởi tạo dịch vụ gửi Email qua Brevo (Port: ${port}).`);
   }
 
   async sendNotification(
@@ -40,7 +27,7 @@ export class ChatopsService implements OnModuleInit {
     attachment?: { filename: string, buffer: Buffer }
   ) {
     try {
-      this.logger.log(`Đang gửi thông báo qua ${channel} tới ${recipient}...`);
+      this.logger.log(`Đang gọi API gửi thông báo qua ${channel} tới ${recipient}...`);
 
       switch (channel) {
         case 'email':
@@ -59,37 +46,50 @@ export class ChatopsService implements OnModuleInit {
   }
 
   private async sendEmail(recipientEmail: string, content: string, attachment?: { filename: string, buffer: Buffer }) {
-    if (!this.transporter) throw new BadRequestException('SMTP Brevo chưa được cấu hình.');
+    if (!this.apiKey) throw new BadRequestException('BREVO_API_KEY chưa được cấu hình.');
     if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(recipientEmail)) {
       throw new BadRequestException('Địa chỉ email nhận không hợp lệ.');
     }
 
-    const mailOptions: any = {
-      from: this.getFromAddress(),
-      to: recipientEmail,
-      subject: '📊 Báo Cáo Phân Tích Dữ Liệu Enterprise',
-      html: `<div style="font-family: Arial, sans-serif; line-height: 1.6;">${content.replace(/\n/g, '<br/>')}</div>`,
+    const url = 'https://api.brevo.com/v3/smtp/email';
+    const headers = {
+      'accept': 'application/json',
+      'api-key': this.apiKey,
+      'content-type': 'application/json',
     };
 
+    // Đóng gói JSON Payload chuẩn của Brevo API
+    const payload: any = {
+      sender: { name: 'Enterprise AI Assistant', email: this.senderEmail },
+      to: [{ email: recipientEmail }],
+      subject: '📊 Báo Cáo Phân Tích Dữ Liệu Enterprise',
+      htmlContent: `<div style="font-family: Arial, sans-serif; line-height: 1.6;">${content.replace(/\n/g, '<br/>')}</div>`
+    };
+
+    // Xử lý file đính kèm: Chuyển Buffer thành Base64
     if (attachment) {
-      mailOptions.attachments = [
+      payload.attachment = [
         {
-          filename: attachment.filename,
-          content: attachment.buffer
+          name: attachment.filename,
+          content: attachment.buffer.toString('base64') 
         }
       ];
     }
 
-    const info = await this.transporter.sendMail(mailOptions);
-    this.logger.log(`✅ Email đã gửi thành công (ID: ${info.messageId})`);
-    return info;
-  }
+    // Gọi HTTP Request bằng fetch
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: headers,
+      body: JSON.stringify(payload)
+    });
 
-  private getFromAddress() {
-    const configured = this.config.get<string>('SMTP_FROM')?.trim();
-    if (configured) return configured;
-    
-    const defaultUser = this.config.get<string>('SMTP_USER');
-    return `"Enterprise AI Assistant" <${defaultUser}>`;
+    if (!response.ok) {
+      const errorData = await response.json();
+      throw new Error(`Brevo API Error: ${JSON.stringify(errorData)}`);
+    }
+
+    const info = await response.json();
+    this.logger.log(`✅ Email API đã gửi thành công (Message ID: ${info.messageId})`);
+    return info;
   }
 }
