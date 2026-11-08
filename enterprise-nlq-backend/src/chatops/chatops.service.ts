@@ -9,23 +9,27 @@ export class ChatopsService implements OnModuleInit {
 
   constructor(private readonly config: ConfigService) {}
 
-  // KHỞI TẠO TỰ ĐỘNG TỪ FILE .ENV (Bảo mật hơn việc hardcode mật khẩu)
   onModuleInit() {
-    const host = this.config.get<string>('SMTP_HOST') ?? this.config.get<string>('EMAIL_HOST');
+    const host = this.config.get<string>('SMTP_HOST') ?? 'smtp-relay.brevo.com'; 
     const user = this.config.get<string>('SMTP_USER') ?? this.config.get<string>('EMAIL_USER');
     const pass = this.config.get<string>('SMTP_PASS') ?? this.config.get<string>('EMAIL_PASS');
     
     if (!host || !user || !pass) {
-      this.logger.warn('SMTP chưa cấu hình đầy đủ trong file .env. Tính năng Email có thể bị lỗi.');
+      this.logger.warn('SMTP (Brevo/Gmail) chưa cấu hình đầy đủ trong file .env. Tính năng Email có thể bị lỗi.');
       return;
     }
     
+    // CẤU HÌNH NODEMAILER TỐI ƯU CHO BREVO 
     this.transporter = nodemailer.createTransport({
       host,
-      port: this.config.get<number>('SMTP_PORT') ?? this.config.get<number>('EMAIL_PORT', 587),
-      secure: this.config.get<string>('SMTP_SECURE', 'false') === 'true',
+      port: this.config.get<number>('SMTP_PORT') ?? 587,
+      secure: false, 
       auth: { user, pass },
+      connectionTimeout: 10000, 
+      greetingTimeout: 5000,
     });
+
+    this.logger.log('Đã khởi tạo dịch vụ gửi Email (SMTP).');
   }
 
   // HÀM ĐIỀU PHỐI ĐA KÊNH
@@ -71,7 +75,6 @@ export class ChatopsService implements OnModuleInit {
       from: this.getFromAddress(),
       to: recipientEmail,
       subject: '📊 Báo Cáo Phân Tích Dữ Liệu Enterprise',
-      // Format nội dung thành HTML (xuống dòng bằng <br>) nếu là text thuần
       html: `<div style="font-family: Arial, sans-serif; line-height: 1.6;">${content.replace(/\n/g, '<br/>')}</div>`,
     };
 
@@ -93,9 +96,8 @@ export class ChatopsService implements OnModuleInit {
   // LẤY ĐỊA CHỈ NGƯỜI GỬI
   private getFromAddress() {
     const configured = this.config.get<string>('SMTP_FROM')?.trim();
-    const fallback = this.config.get<string>('SMTP_USER') ?? this.config.get<string>('EMAIL_USER');
-    if (configured?.includes('@')) return configured;
-    if (fallback) return fallback;
+    if (configured) return configured;
+    
     return '"Enterprise AI Assistant" <no-reply@enterprise.com>';
   }
 }

@@ -2,9 +2,21 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <link rel="icon" type="image/svg+xml" href="/vite.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>enterprise-nlq-extension</title>
+    <title>Enterprise NLQ Extension</title>
+    
+    <!-- CHÈN ĐOẠN STYLE NÀY VÀO ĐỂ ÉP KÍCH THƯỚC CHROME EXTENSION -->
+    <style>
+      html, body, #root {
+        width: 800px;  /* Chiều rộng tối đa chuẩn của Chrome Extension */
+        height: 600px; /* Chiều cao tối đa chuẩn của Chrome Extension */
+        margin: 0;
+        padding: 0;
+        overflow: hidden; /* Ngăn xuất hiện thanh cuộn kép */
+      }
+    </style>
+    
   </head>
   <body>
     <div id="root"></div>

@@ -65,7 +65,7 @@ export default function App() {
 
     const loadSessionsOnMount = async () => {
       try {
-        const res = await axios.get('http://localhost:3000/api/query/sessions');
+        const res = await axios.get('https://enterprise-nlq-backend.onrender.com/api/query/sessions');
         if (res.data.success && isMounted) {
           setSessions(res.data.sessions);
         }
@@ -88,9 +88,9 @@ const loadChatHistory = async (id: string) => {
     setLoading(true);
     
     try {
-      const res = await axios.get(`http://localhost:3000/api/query/history/${id}`);
+      const res = await axios.get(`https://enterprise-nlq-backend.onrender.com/api/query/history/${id}`);
       if (res.data.success && res.data.history) {
-        // Thay "msg: any" thành "msg: Omit<ChatMessage, 'id'>"
+
         const loadedMessages: ChatMessage[] = res.data.history.map((msg: Omit<ChatMessage, 'id'>, index: number) => ({
           id: `history-${index}`,
           role: msg.role,
@@ -137,7 +137,7 @@ const loadChatHistory = async (id: string) => {
     setLoading(true);
     
     try {
-      const res = await axios.post('http://localhost:3000/api/query', {
+      const res = await axios.post('https://enterprise-nlq-backend.onrender.com/api/query', {
         sessionId: currentSessionId,
         question: userMsg.content,
         history: messages.map(msg => ({ role: msg.role, content: msg.content })),
@@ -195,7 +195,7 @@ const loadChatHistory = async (id: string) => {
     if (!confirmDelete) return;
 
     try {
-      const res = await axios.delete(`http://localhost:3000/api/query/history/${id}`);
+      const res = await axios.delete(`https://enterprise-nlq-backend.onrender.com/api/query/history/${id}`);
       if (res.data.success) {
         setSessions(prev => prev.filter(s => s.session_id !== id));
         if (sessionId === id) {

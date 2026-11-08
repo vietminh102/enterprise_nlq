@@ -1,16 +1,17 @@
 {
   "manifest_version": 3,
-  "name": "Enterprise Data Assistant",
-  "version": "1.0.0",
-  "description": "Trợ lý AI truy vấn dữ liệu doanh nghiệp",
-  "permissions": ["sidePanel"],
-  "background": {
-    "service_worker": "background.js"
-  },
+  "name": "Enterprise NLQ Assistant",
+  "version": "1.0",
+  "description": "Trợ lý phân tích dữ liệu doanh nghiệp bằng ngôn ngữ tự nhiên",
   "action": {
-    "default_title": "Mở Trợ lý AI"
+    "default_popup": "index.html",
+    "default_title": "Mở Trợ lý"
   },
-  "side_panel": {
-    "default_path": "index.html"
-  }
+  "permissions": [
+    "storage",
+    "activeTab"
+  ],
+  "host_permissions": [
+    "https://enterprise-nlq-backend.onrender.com/*"
+  ]
 }
