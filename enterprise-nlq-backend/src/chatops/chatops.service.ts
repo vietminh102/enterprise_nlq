@@ -10,8 +10,8 @@ export class ChatopsService implements OnModuleInit {
   constructor(private readonly config: ConfigService) {}
 
   onModuleInit() {
-    const apiKey: string = this.config.get<string>('BREVO_API_KEY')!;
-    this.senderEmail = this.config.get<string>('SMTP_FROM') || 'thongbaolovee@gmail.com';
+  this.apiKey = this.config.get<string>('BREVO_API_KEY')!; 
+  this.senderEmail = this.config.get<string>('SMTP_FROM') || 'thongbaolovee@gmail.com';
     
     if (!this.apiKey) {
       this.logger.warn('❌ Chưa cấu hình BREVO_API_KEY. Tính năng Email API bị vô hiệu hóa.');
